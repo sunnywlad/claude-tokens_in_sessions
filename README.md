@@ -296,11 +296,9 @@ Non vu en réel : `count:finish` (levée puis retombée à la fin du tour),
    (2026-10-18). Fichiers `count.sh` et `test-count.sh`, préfixe `count:N`,
    `count:off`, `count:finish`, variables `COUNT_*`, dossier d'état
    `~/.claude/count/`, messages injectés ("Compte de tâche"), commandes de hooks
-   dans `settings.json`. Tests écrits rouges d'abord (62 échecs), puis verts (106).
+   dans `settings.json`. Anciens fichiers de `~/.claude/` supprimés. Tests écrits rouges d'abord (62 échecs), puis verts (106).
    **Pas d'alias** `budget:` : un `budget:5` tapé par réflexe est ignoré en
-   silence. Reste : voir un `count:3` en réel dans une session neuve ; supprimer
-   les anciens `~/.claude/budget.sh`, `test-budget.sh` et le dossier
-   `~/.claude/budget/` ; renommer le dépôt (nom `claude-session-budget`, remote
+   silence. Reste : voir un `count:3` en réel dans une session neuve ; renommer le dépôt (nom `claude-session-budget`, remote
    GitHub, submodule de `ai-tools`) ; pousser, seulement sur ordre. Le mot
    « budget » reste dans la prose de ce README pour le concept. Les préfixes
    d'essai sont désormais `count:3` et `count:5`.
