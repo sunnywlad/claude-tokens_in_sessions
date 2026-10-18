@@ -218,16 +218,29 @@ session continue de répondre en texte, ce qui coûte de la fenêtre.
 Attention : le verrou bloque aussi `Edit` et `Write`, donc la session qui le
 déclenche ne peut plus rien écrire avant `finish`, `N` ou `off`.
 
+Vu en réel, troisième passe (`budget:3`, départ 41 %, plafond 44 %) :
+- **Prompt refusé au verrou** : un « salut » sans préfixe a affiché
+  `UserPromptSubmit operation blocked by hook`, la raison, puis
+  `Original prompt: salut`. Le texte reste dans la zone de saisie. `budget:off`
+  passe et lève le verrou.
+- **Rappel 50 %** : reçu à `2/3`, sur le `PostToolUse` d'un lot de trois `Read`.
+- **Rappel 100 %** : non reçu. Le verrou `PreToolUse` a vu 3/3 avant que le
+  `PostToolUse` ne le voie ; quatre `Read` parallèles ont tous été refusés. Que
+  100 soit dans `fired` n'a pas été relevé.
+- **Coût** : 3 points de fenêtre pour une quarantaine de lectures, dont de
+  gros fichiers relus en boucle. Le contexte est monté à 257k : un essai de
+  consommation par relecture gonfle le contexte, donc le coût par appel.
+- **Status line** : `task` a avancé (1/3 puis 3/3) pendant la tâche, orange à
+  100 %. Pas de figement vu sur une session active.
+
 Non vu en réel : `budget:finish` (levée puis retombée à la fin du tour),
 `budget:N` après verrou, sous-agent refusé et message à l'orchestrateur.
 
 ### Prochaine session, dans cet ordre
 
-1. **Refuser le prompt au verrou : fait dans le code** (tests verts), **pas vu en
-   réel**. Décidé : seuls les préfixes `budget:` passent. À éprouver en session :
-   le blocage s'affiche-t-il avec la raison, le prompt disparaît-il de la zone
-   de saisie (la doc ne le dit pas), et `/clear` ou une commande intégrée
-   passe-t-elle par ce hook (supposé que non).
+1. **Refuser le prompt au verrou : fait et vu en réel** (2026-10-18). Seuls les
+   préfixes `budget:` passent. Reste à éprouver : `/clear` ou une commande
+   intégrée passe-t-elle par ce hook (supposé que non).
 2. **Status line figée sur une session au repos.** `refreshInterval: 60` est déjà
    dans `settings.json`, la cause reste à trouver : la status line ne se relance
    peut-être pas sur une session inactive, ou n'est pas réécrite sans événement.
