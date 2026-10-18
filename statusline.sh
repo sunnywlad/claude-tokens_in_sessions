@@ -67,10 +67,16 @@ if [ -n "$used5" ] || [ -n "$pace" ]; then
   tmp="$out.tmp.$$"
   old=$(cat "$out" 2>/dev/null)
   [ -z "$old" ] && old='{}'
+  # An idle session holds stale rate_limits: in the same window (resets_at within 60 s) a lower
+  # used_percentage loses, and an older window loses. A newer window replaces.
   if echo "$input" | jq --argjson old "$old" '
-      $old + ({
-        used_percentage: .rate_limits.five_hour.used_percentage,
-        resets_at: .rate_limits.five_hour.resets_at,
+      (.rate_limits.five_hour // {}) as $in
+      | $old.resets_at as $or | $old.used_percentage as $ou
+      | (if $in.resets_at != null and $in.used_percentage != null and $or != null and $ou != null
+            and ($in.resets_at < $or - 60
+                 or ((($in.resets_at - $or) | fabs) < 60 and $in.used_percentage < $ou))
+         then {} else {used_percentage: $in.used_percentage, resets_at: $in.resets_at} end) as $five
+      | $old + ($five + {
         seven_day_used_percentage: .rate_limits.seven_day.used_percentage,
         seven_day_resets_at: .rate_limits.seven_day.resets_at
       } | with_entries(select(.value != null)))

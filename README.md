@@ -102,13 +102,14 @@ fichier. L'état de chaque session vit dans `~/.claude/budget/<session_id>.json`
 bash test-budget.sh
 ```
 
-96 vérifications, dans un `$HOME` temporaire, sans toucher à ta configuration :
+101 vérifications, dans un `$HOME` temporaire, sans toucher à ta configuration :
 pose, plafond borné, fenêtre pleine, quota inutilisable (absent, vide,
 malformé, périmé), `off`, seuils une seule fois, saut de seuils, réinitialisation
 de fenêtre, gigue de `resets_at`, deux sessions, `session_id` absent ou
 dangereux, entrée illisible, purge par âge, réémission, segment de status line
 (vert, orange, rouge, absent), verrou à 90 %, `finish`, nouveau plafond, `off`,
-refus du prompt au verrou.
+refus du prompt au verrou, fusion de `quota.json` (valeur périmée
+ignorée, nouvelle fenêtre prise).
 Variables de substitution utilisées par les
 tests : `BUDGET_DIR`, `QUOTA_FILE`, `BUDGET_NOW`.
 
@@ -241,24 +242,32 @@ ensuite) :
 - **L'écran ne suit pas** : B est restée à `5h 51%` pendant toute la mesure,
   même au premier plan, même après une frappe dans la zone de saisie.
 - **Un événement de session repeint** : l'envoi d'un message dans B a mis la
-  ligne à jour. Supposé : Claude Code ne repeint qu'après un événement de
-  session, et jette ou ignore la sortie d'un rafraîchissement périodique.
+  ligne à jour. L'hypothèse tirée de là (Claude Code ignorerait la sortie
+  périodique) est écartée par la cinquième passe.
 - **Pas le même chiffre selon la session** : au même instant, `used5` reçu par
   deux sessions différait de 1 point (B à 52 trois secondes avant l'autre à 51).
-- **Conséquence** : `quota.json` reste frais (la session au repos le réécrit), donc
-  le verrou, qui lit le fichier, ne dépend pas de l'affichage. Seul le segment
-  `task` et le `5h` d'une session au repos sont en retard à l'écran.
+- **Conséquence supposée, corrigée par la cinquième passe** : on croyait
+  `quota.json` frais parce que la session au repos le réécrit ; en fait elle y
+  écrivait une valeur périmée.
 
-Pistes pour le repaint (non essayées) :
-- Vérifier la doc de `statusLine.refreshInterval` : peut-être documente-t-elle
-  ce que le rafraîchissement repeint, ou une version de Claude Code le corrige.
-- Tester si la sortie doit changer pour être repeinte (ex. un champ d'horloge
-  dans la ligne) : si Claude Code compare la sortie, un chiffre inchangé ne
-  repeint rien, mais ici le chiffre changeait.
-- Tester d'autres hooks comme source d'événement : un hook `Notification` ou
-  `SessionStart` ne s'exécute pas au repos, donc sans effet probable.
-- Signaler le comportement à Anthropic (sortie du rafraîchissement périodique
-  non repeinte sur session inactive).
+Cinquième passe (horloge `HH:MM:SS` temporaire dans la sortie, puis trace dans la
+branche d'écriture de `quota.json`, retirées ensuite) :
+- **Le repaint périodique marche** : l'horloge de B a avancé au repos. L'hypothèse
+  « Claude Code jette la sortie périodique » est écartée. Non expliqué : à
+  22:22, le journal disait 53 reçu par B alors que l'écran, sans horloge,
+  affichait 51.
+- **Cause trouvée : écrasement de `quota.json`** par les sessions inactives. À
+  23:31-23:35, `adbc90e9` (reçoit 53) et `259e5df8` (reçoit 52) réécrivaient le
+  fichier chaque minute, alors que la valeur réelle était 55 : le fichier
+  oscillait 55, 53, 52, 55... Cela explique la valeur non monotone de la première
+  passe (5 puis 4 en six secondes) et exposait le verrou à une consommation
+  sous-estimée.
+- **Correctif** (test rouge d'abord, 5 tests) : dans la même fenêtre (`resets_at`
+  à moins de 60 s), une valeur plus basse ne remplace pas la valeur stockée ; une
+  fenêtre plus ancienne est ignorée ; une fenêtre plus récente remplace. Seule
+  la fenêtre 5 h est protégée, `seven_day_*` n'est pas lu par `budget.sh`.
+- **À vérifier en réel** : le fichier ne régresse plus avec plusieurs sessions
+  ouvertes (relevé après coup, pas encore fait avec le correctif actif).
 
 Limite de conception, non notée avant : le budget est un écart de
 `used_percentage`, pourcentage global du compte. La consommation d'une autre
@@ -272,11 +281,12 @@ Non vu en réel : `budget:finish` (levée puis retombée à la fin du tour),
 1. **Refuser le prompt au verrou : fait et vu en réel** (2026-10-18). Seuls les
    préfixes `budget:` passent. Reste à éprouver : `/clear` ou une commande
    intégrée passe-t-elle par ce hook (supposé que non).
-2. **Status line figée sur une session au repos : mesuré, cause côté Claude Code**
-   (2026-10-18, voir la quatrième passe). Le script est relancé et `quota.json`
-   est réécrit ; c'est l'écran qui ne se repeint pas. Pistes de contournement non
-   essayées : voir « Pistes pour le repaint » plus bas. Reste ouvert, hors de nos
-   fichiers.
+2. **Status line figée sur une session au repos : résolu côté données** (2026-10-18,
+   quatrième et cinquième passes). L'écran se repeint bien (horloge test) ; la cause
+   était des sessions inactives qui écrasaient `quota.json` avec des valeurs
+   périmées. Corrigé dans `statusline.sh` (fusion monotone par fenêtre). Reste :
+   le `5h` affiché par une session inactive reste celui que Claude Code lui a
+   transmis, donc en retard à l'écran ; non corrigible chez nous.
 3. **Comptage par session** (à étudier, décision de conception). Aujourd'hui le
    budget est un écart de `used_percentage`, pourcentage global du compte : la
    consommation d'une autre session fait avancer `task`. Piste : sommer les
@@ -342,6 +352,6 @@ Bash and `jq` only.
   is injected.
 - The `budget:N` prefix stays in the prompt: hooks cannot rewrite it.
 
-Install: see the settings snippet above. Tests: `bash test-budget.sh` (96 checks
+Install: see the settings snippet above. Tests: `bash test-budget.sh` (101 checks
 in a throwaway `$HOME`). The French section lists what is still unverified in a
 live session (resume, subagents, update lag).

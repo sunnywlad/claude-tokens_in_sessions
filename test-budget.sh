@@ -244,5 +244,21 @@ reset; quota 10; prompt s1 "budget:20 go" > /dev/null; quota 29; rm -f "$QUOTA_F
 out=$(prompt s1 "an ordinary question")
 check "prompt lock: quota unusable, never blocked" $([ -z "$out" ]; echo $?)
 
+# 20. quota.json never goes backwards inside a window: a session with stale data must not overwrite a fresher value
+sl2() { jq -n --arg s "$1" '{session_id: $s, context_window: {}, rate_limits: {five_hour: {used_percentage: '"$2"', resets_at: '"$3"'}}}' | bash "$T/.claude/statusline.sh" >/dev/null 2>&1; }
+qv() { jq -r "$1" "$QUOTA_FILE"; }
+reset; mkdir -p "$T/.claude"
+sl2 a 55 $FUT
+sl2 b 52 $FUT
+check "quota merge: stale lower value ignored in the same window" $([ "$(qv .used_percentage)" = 55 ]; echo $?)
+sl2 b 57 $FUT
+check "quota merge: higher value taken" $([ "$(qv .used_percentage)" = 57 ]; echo $?)
+sl2 b 53 $((FUT + 3))
+check "quota merge: lower value ignored despite resets_at jitter" $([ "$(qv .used_percentage)" = 57 ]; echo $?)
+sl2 c 4 $FUT2
+check "quota merge: newer window replaces, even lower" $([ "$(qv .used_percentage)" = 4 ] && [ "$(qv .resets_at)" = $FUT2 ]; echo $?)
+sl2 d 60 $FUT
+check "quota merge: older window from a stale session ignored" $([ "$(qv .used_percentage)" = 4 ] && [ "$(qv .resets_at)" = $FUT2 ]; echo $?)
+
 echo "passed: $pass, failed: $fail"
 [ "$fail" -eq 0 ]
