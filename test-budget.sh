@@ -168,7 +168,7 @@ out=$(sl sl1 27)
 check "statusline: orange at 85 %" $(echo "$out" | grep -q $'\033\[38;5;208mtask 17/20'; echo $?)
 out=$(sl sl1 33)
 check "statusline: red beyond 100 %" $(echo "$out" | grep -q $'\033\[31mtask 23/20'; echo $?)
-out=$(sl nobudget 12)
+quota 12; out=$(sl nobudget 12)
 check "statusline: no segment without budget" $(echo "$out" | grep -qv "task"; echo $?)
 check "statusline: still prints 5h part" $(echo "$out" | grep -q "5h"; echo $?)
 check "statusline: 5h shows used (12 %), not left" $(echo "$out" | grep -q "5h 12%" && ! echo "$out" | grep -q "left"; echo $?)
@@ -259,6 +259,24 @@ sl2 c 4 $FUT2
 check "quota merge: newer window replaces, even lower" $([ "$(qv .used_percentage)" = 4 ] && [ "$(qv .resets_at)" = $FUT2 ]; echo $?)
 sl2 d 60 $FUT
 check "quota merge: older window from a stale session ignored" $([ "$(qv .used_percentage)" = 4 ] && [ "$(qv .resets_at)" = $FUT2 ]; echo $?)
+
+# 21. An idle session shows the freshest 5h figure known to quota.json, not its own stale stdin
+slout() { jq -n --arg s "$1" '{session_id: $s, context_window: {}, rate_limits: {five_hour: {used_percentage: '"$2"', resets_at: '"$3"'}}}' | bash "$T/.claude/statusline.sh" 2>/dev/null; }
+reset; quota 55
+out=$(slout idle 52 $FUT)
+check "idle: stale stdin 52 shows the fresher 55 from quota.json" $(echo "$out" | grep -q "5h 55%"; echo $?)
+quota 55
+out=$(slout idle 57 $FUT)
+check "idle: fresher stdin 57 is kept" $(echo "$out" | grep -q "5h 57%"; echo $?)
+quota 4 $FUT2
+out=$(slout idle 60 $FUT)
+check "idle: stdin from an older window shows the newer window of quota.json" $(echo "$out" | grep -q "5h 4%"; echo $?)
+quota 4 $((FUT - 9000))
+out=$(slout idle 30 $FUT)
+check "idle: quota.json from an older window is ignored" $(echo "$out" | grep -q "5h 30%"; echo $?)
+reset
+out=$(slout idle 30 $FUT)
+check "idle: no quota.json, stdin shown" $(echo "$out" | grep -q "5h 30%"; echo $?)
 
 echo "passed: $pass, failed: $fail"
 [ "$fail" -eq 0 ]

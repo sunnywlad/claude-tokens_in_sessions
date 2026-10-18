@@ -102,14 +102,15 @@ fichier. L'état de chaque session vit dans `~/.claude/budget/<session_id>.json`
 bash test-budget.sh
 ```
 
-101 vérifications, dans un `$HOME` temporaire, sans toucher à ta configuration :
+106 vérifications, dans un `$HOME` temporaire, sans toucher à ta configuration :
 pose, plafond borné, fenêtre pleine, quota inutilisable (absent, vide,
 malformé, périmé), `off`, seuils une seule fois, saut de seuils, réinitialisation
 de fenêtre, gigue de `resets_at`, deux sessions, `session_id` absent ou
 dangereux, entrée illisible, purge par âge, réémission, segment de status line
 (vert, orange, rouge, absent), verrou à 90 %, `finish`, nouveau plafond, `off`,
 refus du prompt au verrou, fusion de `quota.json` (valeur périmée
-ignorée, nouvelle fenêtre prise).
+ignorée, nouvelle fenêtre prise), affichage d'une session inactive (le plus frais
+des deux, stdin ou `quota.json`).
 Variables de substitution utilisées par les
 tests : `BUDGET_DIR`, `QUOTA_FILE`, `BUDGET_NOW`.
 
@@ -281,12 +282,16 @@ Non vu en réel : `budget:finish` (levée puis retombée à la fin du tour),
 1. **Refuser le prompt au verrou : fait et vu en réel** (2026-10-18). Seuls les
    préfixes `budget:` passent. Reste à éprouver : `/clear` ou une commande
    intégrée passe-t-elle par ce hook (supposé que non).
-2. **Status line figée sur une session au repos : résolu côté données** (2026-10-18,
-   quatrième et cinquième passes). L'écran se repeint bien (horloge test) ; la cause
-   était des sessions inactives qui écrasaient `quota.json` avec des valeurs
-   périmées. Corrigé dans `statusline.sh` (fusion monotone par fenêtre). Reste :
-   le `5h` affiché par une session inactive reste celui que Claude Code lui a
-   transmis, donc en retard à l'écran ; non corrigible chez nous.
+2. **Status line figée sur une session au repos : corrigé, à voir en réel**
+   (2026-10-18, quatrième et cinquième passes). L'écran se repeint bien (horloge
+   test). Deux causes : des sessions inactives écrasaient `quota.json` avec des
+   valeurs périmées (fusion monotone par fenêtre dans `statusline.sh`), et le
+   `5h` d'une session inactive restait celui de son stdin périmé : le script
+   affiche maintenant le plus frais entre son stdin et `quota.json` (même
+   fenêtre et plus haut, ou fenêtre plus récente). À éprouver : une session
+   active et une inactive, le `5h` de l'inactive doit suivre l'active à la
+   minute. Limite : une session seule, sans autre session active, ne se met à
+   jour que par ses propres appels.
 3. **Comptage par session** (à étudier, décision de conception). Aujourd'hui le
    budget est un écart de `used_percentage`, pourcentage global du compte : la
    consommation d'une autre session fait avancer `task`. Piste : sommer les
@@ -352,6 +357,6 @@ Bash and `jq` only.
   is injected.
 - The `budget:N` prefix stays in the prompt: hooks cannot rewrite it.
 
-Install: see the settings snippet above. Tests: `bash test-budget.sh` (101 checks
+Install: see the settings snippet above. Tests: `bash test-budget.sh` (106 checks
 in a throwaway `$HOME`). The French section lists what is still unverified in a
 live session (resume, subagents, update lag).

@@ -7,8 +7,19 @@ size=$(echo "$input" | jq -r '.context_window.context_window_size // 0')
 sid=$(echo "$input" | jq -r '.session_id // empty')
 name=$(jq -rs --arg sid "$sid" '.[] | select(.sessionId==$sid) | .name' ~/.claude/sessions/*.json 2>/dev/null | head -n1)
 [ -z "$name" ] && name=$(echo "$input" | jq -r '.session_name // empty')
-now=$(date +%s)
+now="${BUDGET_NOW:-$(date +%s)}"
 used5=$(echo "$input" | jq -r '.rate_limits.five_hour.used_percentage // empty')
+reset5=$(echo "$input" | jq -r '.rate_limits.five_hour.resets_at // empty | floor' 2>/dev/null)
+# An idle session's rate_limits are stale: show the freshest window quota.json knows
+# (same window and higher, or a newer window), the other sessions keep it current.
+if [ -n "$used5" ] && [ -n "$reset5" ]; then
+  fresh=$(jq -r --argjson now "$now" --argjson u "$used5" --argjson r "$reset5" '
+    select((.used_percentage | type) == "number" and (.resets_at | type) == "number" and .resets_at > $now)
+    | if .resets_at > $r + 60 then "\(.used_percentage) \(.resets_at)"
+      elif ((.resets_at - $r) | fabs) < 60 and .used_percentage > $u then "\(.used_percentage) \($r)"
+      else empty end' "$HOME/.claude/quota.json" 2>/dev/null)
+  if [ -n "$fresh" ]; then set -- $fresh; used5=$1; reset5=$2; fi
+fi
 
 G='\033[32m'; Y='\033[33m'; R='\033[31m'; O='\033[38;5;208m'; N='\033[0m'
 
@@ -28,7 +39,6 @@ if [ -n "$used5" ]; then
   left=$(echo "$used5" | jq -R 'tonumber | 100 - . | floor')
   if [ "$left" -gt 40 ]; then lc=$G; elif [ "$left" -ge 15 ]; then lc=$Y; else lc=$R; fi
   reset_txt=""
-  reset5=$(echo "$input" | jq -r '.rate_limits.five_hour.resets_at // empty | floor' 2>/dev/null)
   case "$reset5" in
     ''|*[!0-9]*) ;;
     *)
