@@ -238,9 +238,9 @@ Non vu en réel : `budget:finish` (levée puis retombée à la fin du tour),
 5. **Renommer `budget` en `count`** (décidé : périmètre complet, pas seulement le
    préfixe). Touche le préfixe tapé (`count:N`, `count:off`, `count:finish`), les
    messages injectés, les noms de fichiers, les commandes de hooks dans
-   `settings.json`, le dépôt et le submodule de `ai-tools`. **Question ouverte** :
-   garder `budget:` comme alias ? Sans alias, un `budget:5` tapé par réflexe est
-   ignoré en silence. À faire en dernier : le renommage change les chemins des
+   `settings.json`, le dépôt et le submodule de `ai-tools`. **Décidé : pas d'alias**
+   `budget:`. Un `budget:5` tapé par réflexe sera ignoré en silence, à garder en
+   tête. À faire en dernier : le renommage change les chemins des
    fichiers actifs, donc recopier et recharger avec soin ; pousser le dépôt et
    le pointeur du submodule seulement sur ordre. Tests rouges d'abord.
 
