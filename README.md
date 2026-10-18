@@ -205,15 +205,39 @@ ont été vus en session réelle le 2026-10-18 (voir la section suivante).
 Dépassement constaté : 7 sur 5. Causes : un lot de cinq `Edit` en parallèle
 (aucune alerte ne peut s'intercaler dans un lot), le décalage de `quota.json`,
 et un message qui disait « termine l'action en cours », donc autorisait à
-continuer. Réponse : le verrou `PreToolUse` à 90 %, écrit mais **jamais vu en
-réel** à la date de ce commit (les 24 tests ajoutés sont simulés).
+continuer. Réponse : le verrou `PreToolUse` à 90 %.
 
-Reste ouvert : le verrou en session réelle (refus visible, raison reçue,
-`finish`, `N`, `off`, sous-agent refusé), reprise avec `--resume`, rappel reçu
-par le sous-agent ou par le parent (hypothèse : le sous-agent seul), outils en
-échec (`PostToolUseFailure`), les cas du point 8 (deux sessions, `/clear`,
-`/compact`, `budget:` hors début, double pose, préfixe sans tâche), et formule de
-réinitialisation jamais vue en réel.
+Vu en réel : un `Bash` refusé avec la raison complète reçue (consommation, reste
+de la fenêtre, heure de réinitialisation, trois réponses), puis `budget:off`
+qui lève le verrou et supprime l'état. Le verrou ne touche que les outils : la
+session continue de répondre en texte, ce qui coûte de la fenêtre.
+Attention : le verrou bloque aussi `Edit` et `Write`, donc la session qui le
+déclenche ne peut plus rien écrire avant `finish`, `N` ou `off`.
+
+Non vu en réel : `budget:finish` (levée puis retombée à la fin du tour),
+`budget:N` après verrou, sous-agent refusé et message à l'orchestrateur.
+
+### Prochaine session, dans cet ordre
+
+1. **Refuser le prompt au verrou.** Lire la section `UserPromptSubmit` de la doc
+   (champ de blocage et son effet sur le prompt), puis test rouge. À trancher
+   avec l'utilisateur : ne laisser passer que les prompts commençant par
+   `budget:`, ou aussi les questions ordinaires.
+2. **Status line figée sur une session au repos.** `refreshInterval: 60` est déjà
+   dans `settings.json`, la cause reste à trouver : la status line ne se relance
+   peut-être pas sur une session inactive, ou n'est pas réécrite sans événement.
+   Mesurer sur une session laissée ouverte, sans relevé manuel. Piste : un
+   rafraîchissement de `quota.json` ne profite qu'à la session qui l'écrit ; une
+   session au repos affiche un chiffre en retard.
+3. **Outils en échec** : `PostToolUseFailure` (un `Read` sur un fichier absent n'a
+   que `PreToolUse`). `budget:3` suffit.
+4. Rappel et refus côté sous-agent, `--resume`, les cas du point 8 (deux sessions,
+   `/clear`, `/compact`, `budget:` hors début, double pose, préfixe sans tâche),
+   formule de réinitialisation jamais vue en réel, blocage par `Stop`.
+
+Règles de la passe : un point à la fois, `budget:3` ou `budget:5` pour les essais,
+aucun lancement manuel de `statusline.sh` avec de fausses valeurs, pas de
+mémoire locale (tout vit ici).
 
 ### Pour qu'une autre session reprenne le travail
 
