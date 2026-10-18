@@ -73,13 +73,14 @@ prompt_mode() {
   # within 24 h (same session_id assumed; unverified), otherwise it is purged here.
   find "$COUNT_DIR" -name '*.json' -mmin +"$STALE_MIN" -delete 2>/dev/null
 
-  if ! [[ $prompt =~ ^[[:space:]]*count:(off|finish|[1-9][0-9]*)([[:space:]]|$) ]]; then
+  # A pasted prompt arrives wrapped in <pasted_content id="...">: the prefix right after it counts.
+  if ! [[ $prompt =~ ^[[:space:]]*(\<pasted_content[^\>]*\>[[:space:]]*)?count:(off|finish|[1-9][0-9]*)([[:space:]]|$) ]]; then
     if [ -f "$COUNT_DIR/$sid.json" ] && locked "$COUNT_DIR/$sid.json"; then
       emit_block "Compte de tâche à 90 % ou plus : prompt refusé, aucun coût. Réponds par count:finish (terminer l'étape en cours), count:N (nouveau plafond de N %) ou count:off (tâche terminée)."
     fi
     exit 0
   fi
-  n=${BASH_REMATCH[1]}
+  n=${BASH_REMATCH[2]}
   f="$COUNT_DIR/$sid.json"
 
   if [ "$n" = finish ]; then
@@ -193,7 +194,42 @@ status_mode() {
   echo "$1 $2 $3"
 }
 
+# Prints "model input cache_write cache_read output" per model for a transcript and its
+# sub-agent files (<transcript minus .jsonl>/subagents/*.jsonl). One API message spans several
+# transcript lines with the same message.id, so it is deduplicated across all files.
+# Lines that do not parse (a half-written last line) are skipped. Silent on a missing file.
+tokens_mode() {
+  local tr=$1 f
+  [ -f "$tr" ] || exit 0
+  for f in "$tr" "${tr%.jsonl}"/subagents/*.jsonl; do
+    [ -f "$f" ] && { cat "$f"; echo; }   # echo: a truncated last line must not glue to the next file
+  done | jq -rnR '
+    [inputs | fromjson? | select(.type == "assistant" and .message.usage != null) | .message]
+    | unique_by(.id) | group_by(.model)[]
+    | "\(.[0].model) \(map(.usage.input_tokens // 0) | add) \(map(.usage.cache_creation_input_tokens // 0) | add) \(map(.usage.cache_read_input_tokens // 0) | add) \(map(.usage.output_tokens // 0) | add)"' 2>/dev/null
+}
+
+# Calibration journal (PostToolUse): one JSON line per call in $COUNT_DIR/calib.log, pairing the
+# global used_percentage with the session's transcript tokens per model. Only for a session with
+# an active count; nothing is written when the quota or the transcript is unusable. Prints nothing.
+log_mode() {
+  local in sid tr q tok
+  in=$(cat)
+  sid=$(jq -r '.session_id // empty' <<<"$in" 2>/dev/null)
+  tr=$(jq -r '.transcript_path // empty' <<<"$in" 2>/dev/null)
+  valid_sid "$sid" || exit 0
+  [ -f "$COUNT_DIR/$sid.json" ] && [ -f "$tr" ] || exit 0
+  q=$(quota); [ -n "$q" ] || exit 0
+  set -- $q
+  tok=$(tokens_mode "$tr" | jq -Rn '[inputs | split(" ") | {(.[0]): (.[1:] | map(tonumber))}] | add // {}')
+  [ -n "$tok" ] || exit 0
+  jq -nc --argjson t "$NOW" --arg s "$sid" --argjson u "$1" --argjson r "$2" --argjson k "$tok" \
+    '{t: $t, sid: $s, used: $u, resets_at: $r, tokens: $k}' >> "$COUNT_DIR/calib.log"
+}
+
 case "$1" in
+  log)    log_mode ;;
+  tokens) tokens_mode "$2" ;;
   prompt) prompt_mode ;;
   tool)   tool_mode ;;
   pre)    pre_mode ;;

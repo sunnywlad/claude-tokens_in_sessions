@@ -102,7 +102,7 @@ fichier. L'état de chaque session vit dans `~/.claude/count/<session_id>.json`
 bash test-count.sh
 ```
 
-106 vérifications, dans un `$HOME` temporaire, sans toucher à ta configuration :
+132 vérifications, dans un `$HOME` temporaire, sans toucher à ta configuration :
 pose, plafond borné, fenêtre pleine, quota inutilisable (absent, vide,
 malformé, périmé), `off`, seuils une seule fois, saut de seuils, réinitialisation
 de fenêtre, gigue de `resets_at`, deux sessions, `session_id` absent ou
@@ -315,6 +315,35 @@ Non vu en réel : `count:finish` (levée puis retombée à la fin du tour),
    le pourcentage global pour la fenêtre. Inconnus : conversion tokens en points
    de fenêtre (cache, modèle), tokens des sous-agents absents ou non du transcript
    parent. Observé : le transcript porte des tokens par message. Supposé : le reste.
+   **Établi le 2026-10-19 (transcripts réels)** :
+   - Un message API s'étale sur 2 à 3 lignes `assistant` (même `message.id`, même
+     `usage`, 0 divergence sur 31 ids) : dédupliquer par `message.id`.
+   - `usage` : `input_tokens`, `cache_creation_input_tokens`, `cache_read_input_tokens`,
+     `output_tokens` (réflexion incluse), plus `message.model`. L'effort n'a donc pas de
+     poids propre, il agit sur les tokens.
+   - Sous-agents : **absents** du transcript parent. Fichiers
+     `<session>/subagents/agent-*.jsonl`, `sessionId` = parent, `isSidechain: true`.
+   - `cost-state` (coût cumulé) n'est écrit qu'en dernière ligne, à la fin de la
+     session : inutilisable en direct. Recoupement : le parseur donne 1 à 2 % de moins.
+   - `compact_boundary` dans le même fichier, sans `usage`. Coût du résumé non établi.
+   - Coût de calcul : 70 ms pour 4 Mo de transcript.
+   - Collé dans l'invite, un prompt arrive enveloppé de `<pasted_content id="...">` :
+     le préfixe `count:` collé était ignoré en silence. Corrigé (test rouge d'abord).
+   - Fenêtre en cours (65 %) : 54 M tokens de cache lu, 1,4 M de cache écrit, 0,26 M de
+     sortie pour Sonnet. Une seule observation : la conversion n'est pas dérivable.
+   **Conception retenue** : le compteur de session devient des tokens pondérés
+   (modèle × catégorie) convertis en points par un K étalonné, le pourcentage global
+   restant la source pour la fenêtre. Poids de départ : rapports de prix de l'API, à
+   vérifier. Limite : claude.ai, mobile et agents Hermes consomment la fenêtre sans
+   transcript local et faussent K.
+   **Étape 1 faite** : `count.sh tokens CHEMIN` (une ligne par modèle, sous-agents inclus)
+   et `count.sh log` (hook `PostToolUse`, une ligne JSON par appel dans
+   `~/.claude/count/calib.log`, sessions avec un `count:` actif seulement : `t`, `sid`,
+   `used`, `resets_at`, `tokens` par modèle). Première lecture réelle : 4 lignes
+   cohérentes ; 240k tokens de cache lu sans bouger `used`.
+   **Prochaine étape** : essais d'étalonnage (fenêtre seule, hors réinitialisation,
+   compositions de tokens contrastées, au moins 5 points chacun), puis validation sur
+   un essai tenu à part ; ensuite seulement, le comptage en points dans `count.sh`.
 5. **Outils en échec** : `PostToolUseFailure` (un `Read` sur un fichier absent n'a
    que `PreToolUse`). Un petit budget suffit pour l'essai.
 6. Rappel et refus côté sous-agent, `--resume`, les cas du point 8 (deux sessions,
@@ -372,6 +401,6 @@ Bash and `jq` only.
   is injected.
 - The `count:N` prefix stays in the prompt: hooks cannot rewrite it.
 
-Install: see the settings snippet above. Tests: `bash test-count.sh` (106 checks
+Install: see the settings snippet above. Tests: `bash test-count.sh` (132 checks
 in a throwaway `$HOME`). The French section lists what is still unverified in a
 live session (resume, subagents, update lag).

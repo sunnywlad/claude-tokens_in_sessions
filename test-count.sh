@@ -278,5 +278,83 @@ reset
 out=$(slout idle 30 $FUT)
 check "idle: no quota.json, stdin shown" $(echo "$out" | grep -q "5h 30%"; echo $?)
 
+# 22. Transcript tokens: `count.sh tokens PATH` prints "model input cache_write cache_read output",
+# one line per model, deduplicated by message.id, sub-agent files (<PATH minus .jsonl>/subagents/*.jsonl) included
+msg() { # msg ID MODEL IN CACHE_WRITE CACHE_READ OUT
+  jq -nc --arg id "$1" --arg m "$2" --argjson i "$3" --argjson cw "$4" --argjson cr "$5" --argjson o "$6" \
+    '{type: "assistant", message: {id: $id, model: $m, usage: {input_tokens: $i, cache_creation_input_tokens: $cw, cache_read_input_tokens: $cr, output_tokens: $o}}}'
+}
+TR="$T/proj/tr1.jsonl"; mkdir -p "$T/proj/tr1/subagents"
+{
+  echo '{"type":"user","message":{"content":"hello"}}'
+  msg m1 sonnet 2 100 1000 10
+  msg m1 sonnet 2 100 1000 10        # same API message, second content block
+  msg m2 sonnet 3 50 2000 20
+  msg m3 opus 1 10 500 5
+  echo '{"type":"system","subtype":"turn_duration"}'
+} > "$TR"
+out=$($B tokens "$TR")
+check "tokens: duplicate message.id counted once, per model" $([ "$(echo "$out" | grep '^sonnet ')" = "sonnet 5 150 3000 30" ]; echo $?)
+check "tokens: second model on its own line" $([ "$(echo "$out" | grep '^opus ')" = "opus 1 10 500 5" ]; echo $?)
+check "tokens: non-assistant lines ignored" $([ "$(echo "$out" | wc -l)" = 2 ]; echo $?)
+{ msg a1 sonnet 1 20 300 4; msg a1 sonnet 1 20 300 4; msg a2 haiku 2 0 100 1; } > "$T/proj/tr1/subagents/agent-x.jsonl"
+out=$($B tokens "$TR")
+check "tokens: sub-agent usage added to the same model" $([ "$(echo "$out" | grep '^sonnet ')" = "sonnet 6 170 3300 34" ]; echo $?)
+check "tokens: sub-agent model with no parent line appears" $([ "$(echo "$out" | grep '^haiku ')" = "haiku 2 0 100 1" ]; echo $?)
+printf '%s' '{"type":"assistant","message":{"id":"cut","model":"sonn' >> "$TR"   # half-written last line
+out=$($B tokens "$TR"); rc=$?
+check "tokens: truncated last line ignored, rc 0" $([ $rc -eq 0 ] && [ "$(echo "$out" | grep '^sonnet ')" = "sonnet 6 170 3300 34" ]; echo $?)
+out=$($B tokens "$T/proj/absent.jsonl"); rc=$?
+check "tokens: missing file, silent rc 0" $([ -z "$out" ] && [ $rc -eq 0 ]; echo $?)
+out=$($B tokens); rc=$?
+check "tokens: no path, silent rc 0" $([ -z "$out" ] && [ $rc -eq 0 ]; echo $?)
+: > "$T/proj/empty.jsonl"
+out=$($B tokens "$T/proj/empty.jsonl")
+check "tokens: empty file, silent" $([ -z "$out" ]; echo $?)
+
+# 23. Calibration journal: `count.sh log` (PostToolUse) appends one JSON line per call to
+# $COUNT_DIR/calib.log, only for a session with an active count. Never prints anything.
+logev() { jq -n --arg s "$1" --arg t "$2" '{session_id: $s, transcript_path: $t, tool_name: "Bash", hook_event_name: "PostToolUse"}' | $B log; }
+LOG="$COUNT_DIR/calib.log"
+reset; quota 10
+out=$(logev nocount "$TR")
+check "log: no count, nothing written" $([ -z "$out" ] && [ ! -e "$LOG" ]; echo $?)
+prompt s1 "count:20 go" > /dev/null
+out=$(logev s1 "$TR")
+check "log: silent on stdout" $([ -z "$out" ]; echo $?)
+check "log: one line written" $([ "$(wc -l < "$LOG")" = 1 ]; echo $?)
+check "log: session, quota and time" $([ "$(jq -r '[.sid, .used, .resets_at, .t] | join(" ")' "$LOG")" = "s1 10 $FUT 1000000" ]; echo $?)
+check "log: tokens per model" $([ "$(jq -c '.tokens' "$LOG")" = '{"haiku":[2,0,100,1],"opus":[1,10,500,5],"sonnet":[6,170,3300,34]}' ]; echo $?)
+quota 12; logev s1 "$TR"
+check "log: second call appends" $([ "$(wc -l < "$LOG")" = 2 ] && [ "$(tail -1 "$LOG" | jq -r .used)" = 12 ]; echo $?)
+check "log: purge by age keeps the journal" $(touch -d '3 days ago' "$LOG"; prompt s1 "hello" > /dev/null; [ -e "$LOG" ]; echo $?)
+rm -f "$LOG"
+logev s1 "$T/proj/absent.jsonl"
+check "log: transcript missing, nothing written" $([ ! -e "$LOG" ]; echo $?)
+logev s1 ""
+check "log: transcript path empty, nothing written" $([ ! -e "$LOG" ]; echo $?)
+rm -f "$QUOTA_FILE"; logev s1 "$TR"
+check "log: quota unusable, nothing written" $([ ! -e "$LOG" ]; echo $?)
+echo 'not json' | $B log; check "log: garbage stdin rc 0" $([ $? -eq 0 ]; echo $?)
+
+# 24. A pasted prompt arrives wrapped in <pasted_content id="..."> (seen in a real session, 2026-10-19):
+# the prefix right after the wrapper counts as the start of the prompt
+reset; quota 11
+out=$(prompt s1 $'\n\n<pasted_content id="e090">\ncount:5 do the task')
+check "pasted: count set after the wrapper" $([ "$(state s1 .cap)" = 16 ]; echo $?)
+reset; quota 11
+prompt s1 $'<pasted_content id="4ade">count:5 go' > /dev/null
+check "pasted: wrapper without newline accepted" $([ "$(state s1 .cap)" = 16 ]; echo $?)
+out=$(prompt s1 $'\n<pasted_content id="x">\ncount:off')
+check "pasted: count:off after the wrapper" $([ ! -e "$COUNT_DIR/s1.json" ]; echo $?)
+reset; quota 11
+out=$(prompt s1 $'<pasted_content id="e090">\nplease explain count:5 to me')
+check "pasted: prefix not right after the wrapper, ignored" $([ -z "$out" ] && [ ! -e "$COUNT_DIR/s1.json" ]; echo $?)
+out=$(prompt s1 $'text first <pasted_content id="e090">\ncount:5 go')
+check "pasted: wrapper not at the start, ignored" $([ -z "$out" ] && [ ! -e "$COUNT_DIR/s1.json" ]; echo $?)
+reset; quota 10; prompt s1 "count:20 go" > /dev/null; quota 28
+out=$(prompt s1 $'<pasted_content id="e090">\ncount:finish')
+check "pasted: count:finish passes the lock" $([ "$(state s1 .grant)" = true ]; echo $?)
+
 echo "passed: $pass, failed: $fail"
 [ "$fail" -eq 0 ]
