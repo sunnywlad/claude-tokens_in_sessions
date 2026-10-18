@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Status line: name | ctx 87k/1M | 5h NN% left
+# Status line: name | ctx 87k/1M | 5h NN% (used)
 input=$(cat)
 
 ctx=$(echo "$input" | jq -r '(.context_window.current_usage // {}) | ((.input_tokens // 0) + (.cache_creation_input_tokens // 0) + (.cache_read_input_tokens // 0))')
@@ -40,7 +40,7 @@ if [ -n "$used5" ]; then
       fi
       ;;
   esac
-  five=$(printf "${lc}5h %s%% left%s${N}" "$left" "$reset_txt")
+  five=$(printf "${lc}5h %s%%%s${N}" "$(echo "$used5" | jq -R 'tonumber | floor')" "$reset_txt")
 else
   five="5h --"
 fi

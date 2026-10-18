@@ -95,7 +95,7 @@ check "80 %: fires" $(echo "$out" | ctx | grep -q "80 % consommé"; echo $?)
 out=$(tool s1)
 check "80 % again: silent" $([ -z "$out" ]; echo $?)
 quota 31; out=$(tool s1)
-check "100 %: fires, tells to stop" $(echo "$out" | ctx | grep -q "plafond atteint.*Arrête-toi proprement.*résume"; echo $?)
+check "100 %: fires, tells to stop" $(echo "$out" | ctx | grep -q "plafond atteint.*Arrête-toi à la fin de cette étape.*résume"; echo $?)
 out=$(tool s1)
 check "100 % again: silent" $([ -z "$out" ]; echo $?)
 check "fired list complete" $([ "$(state s1 '.fired | join(",")')" = "50,80,100" ]; echo $?)
@@ -171,6 +171,54 @@ check "statusline: red beyond 100 %" $(echo "$out" | grep -q $'\033\[31mtask 23/
 out=$(sl nobudget 12)
 check "statusline: no segment without budget" $(echo "$out" | grep -qv "task"; echo $?)
 check "statusline: still prints 5h part" $(echo "$out" | grep -q "5h"; echo $?)
+check "statusline: 5h shows used (12 %), not left" $(echo "$out" | grep -q "5h 12%" && ! echo "$out" | grep -q "left"; echo $?)
+
+# 16. PreToolUse lock from 90 % of the budget: start 10, budget 20, cap 30; 90 % = used 28
+pre() { jq -n --arg s "$1" --arg a "${2:-}" '{session_id: $s, tool_name: "Bash", hook_event_name: "PreToolUse"} + (if $a != "" then {agent_id: $a} else {} end)' | $B pre; }
+stopev() { jq -n --arg s "$1" '{session_id: $s, hook_event_name: "Stop", stop_hook_active: false}' | $B stop; }
+reset; quota 10; prompt s1 "budget:20 go" > /dev/null
+quota 27; out=$(pre s1)
+check "lock: silent at 85 %" $([ -z "$out" ]; echo $?)
+quota 28; out=$(pre s1)
+check "lock: deny at 90 %" $([ "$(echo "$out" | jq -r .hookSpecificOutput.permissionDecision)" = deny ]; echo $?)
+check "lock: event name" $([ "$(echo "$out" | jq -r .hookSpecificOutput.hookEventName)" = PreToolUse ]; echo $?)
+reason=$(echo "$out" | jq -r .hookSpecificOutput.permissionDecisionReason)
+check "lock: reason offers finish, new cap, off" $(echo "$reason" | grep -q "budget:finish" && echo "$reason" | grep -q "budget:N" && echo "$reason" | grep -q "budget:off"; echo $?)
+check "lock: reason gives global window left" $(echo "$reason" | grep -q "72 %"; echo $?)
+check "lock: reason says ask the user" $(echo "$reason" | grep -qi "demande"; echo $?)
+out=$(pre s1 agent42)
+check "lock: subagent told to hand back to orchestrator" $(echo "$out" | jq -r .hookSpecificOutput.permissionDecisionReason | grep -q "orchestrateur"; echo $?)
+out=$(pre nobudget)
+check "lock: no budget, silent" $([ -z "$out" ]; echo $?)
+echo 'not json' | $B pre; check "lock: garbage stdin rc 0" $([ $? -eq 0 ]; echo $?)
+rm -f "$QUOTA_FILE"; out=$(pre s1)
+check "lock: quota unusable, silent" $([ -z "$out" ]; echo $?)
+
+# 17. The three answers to a lock: finish, new cap, off
+reset; quota 10; prompt s1 "budget:20 go" > /dev/null; quota 29
+out=$(prompt s1 "budget:finish")
+check "finish: grant stored" $([ "$(state s1 .grant)" = true ]; echo $?)
+check "finish: says so" $(echo "$out" | ctx | grep -q "étape en cours"; echo $?)
+check "finish: lock lifted" $([ -z "$(pre s1)" ]; echo $?)
+stopev s1
+check "finish: grant cleared at end of turn" $([ "$(state s1 '.grant // false')" = false ]; echo $?)
+check "finish: lock back after the turn" $([ -n "$(pre s1)" ]; echo $?)
+out=$(prompt s1 "budget:10 more")
+check "new cap: fresh start at current use" $([ "$(state s1 .start)" = 29 ] && [ "$(state s1 .cap)" = 39 ]; echo $?)
+check "new cap: lock lifted" $([ -z "$(pre s1)" ]; echo $?)
+quota 38; prompt s1 "budget:off" > /dev/null
+check "off: state removed after lock" $([ ! -e "$BUDGET_DIR/s1.json" ]; echo $?)
+check "off: no lock" $([ -z "$(pre s1)" ]; echo $?)
+out=$(prompt s9 "budget:finish")
+check "finish without budget: says none, no state" $(echo "$out" | ctx | grep -q "aucun budget" && [ ! -e "$BUDGET_DIR/s9.json" ]; echo $?)
+stopev nobudget; check "stop without state: rc 0" $([ $? -eq 0 ]; echo $?)
+check "stop: silent" $([ -z "$(stopev nobudget)" ]; echo $?)
+
+# 18. Messages tell the session how the budget gets closed
+reset; quota 10; out=$(prompt s1 "budget:20 go")
+check "set: tells to ask the user before closing the budget" $(echo "$out" | ctx | grep -q "budget:off"; echo $?)
+quota 31; out=$(tool s1)
+check "100 %: asks the user, offers finish" $(echo "$out" | ctx | grep -q "budget:finish"; echo $?)
 
 echo "passed: $pass, failed: $fail"
 [ "$fail" -eq 0 ]

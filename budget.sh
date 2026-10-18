@@ -2,6 +2,8 @@
 # Per-session budget on the 5h rate-limit window.
 #   budget.sh prompt        UserPromptSubmit hook (JSON on stdin)
 #   budget.sh tool          PostToolUse hook (JSON on stdin)
+#   budget.sh pre           PreToolUse hook: denies every tool from 90 % of the budget, unless granted
+#   budget.sh stop          Stop hook: ends a "budget:finish" grant at the end of the turn
 #   budget.sh status SID    for the status line: prints "consumed budget pct", or nothing
 # State: $BUDGET_DIR/<session_id>.json, written only by that session (atomic tmp + mv).
 # Quota: quota.json, written by statusline.sh. Env overrides exist for the tests.
@@ -42,6 +44,10 @@ emit() { # emit EVENT MESSAGE
   jq -n --arg ev "$1" --arg c "$2" '{hookSpecificOutput: {hookEventName: $ev, additionalContext: $c}}'
 }
 
+emit_deny() { # emit_deny REASON
+  jq -n --arg r "$1" '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: $r}}'
+}
+
 valid_sid() { [[ $1 =~ ^[A-Za-z0-9_-]+$ ]]; }
 
 prompt_mode() {
@@ -54,9 +60,20 @@ prompt_mode() {
   # within 24 h (same session_id assumed; unverified), otherwise it is purged here.
   find "$BUDGET_DIR" -name '*.json' -mmin +"$STALE_MIN" -delete 2>/dev/null
 
-  [[ $prompt =~ ^[[:space:]]*budget:(off|[1-9][0-9]*)([[:space:]]|$) ]] || exit 0
+  [[ $prompt =~ ^[[:space:]]*budget:(off|finish|[1-9][0-9]*)([[:space:]]|$) ]] || exit 0
   n=${BASH_REMATCH[1]}
   f="$BUDGET_DIR/$sid.json"
+
+  if [ "$n" = finish ]; then
+    if [ ! -f "$f" ]; then
+      emit UserPromptSubmit "Il n'y a aucun budget actif dans cette session : budget:finish ignoré."
+      exit 0
+    fi
+    tmp="$f.tmp.$$"
+    jq '.grant = true' "$f" > "$tmp" && mv "$tmp" "$f" || { rm -f "$tmp"; exit 0; }
+    emit UserPromptSubmit "Autorisation donnée : termine l'étape en cours, puis arrête-toi, résume où tu en es et attends. L'autorisation tombe à la fin de ce tour."
+    exit 0
+  fi
 
   if [ "$n" = off ]; then
     rm -f "$f"
@@ -86,7 +103,7 @@ prompt_mode() {
   jq -n --argjson s "$start" --argjson c "$cap" --argjson r "$2" --argjson t "$NOW" \
     '{start: $s, cap: $c, resets_at: $r, set_at: $t, fired: []}' > "$tmp" && mv "$tmp" "$f" || { rm -f "$tmp"; exit 0; }
 
-  emit UserPromptSubmit "Budget de tâche : $(jq -n --argjson s "$start" --argjson c "$cap" '$c - $s | floor') % de la fenêtre 5 h (départ à $(jq -n --argjson s "$start" '$s | floor') %), consommé 0, plafond atteint à $(jq -n --argjson c "$cap" '$c | floor') %.${note} Surveille ta consommation. Au plafond, arrête-toi proprement et résume où tu en es."
+  emit UserPromptSubmit "Budget de tâche : $(jq -n --argjson s "$start" --argjson c "$cap" '$c - $s | floor') % de la fenêtre 5 h (départ à $(jq -n --argjson s "$start" '$s | floor') %), consommé 0, plafond atteint à $(jq -n --argjson c "$cap" '$c | floor') %.${note} Surveille ta consommation. Au plafond, arrête-toi proprement et résume où tu en es. Quand la tâche est terminée, demande à l'utilisateur s'il veut clore le budget (budget:off)."
 }
 
 tool_mode() {
@@ -110,8 +127,42 @@ tool_mode() {
   case "$level" in
     50)  emit PostToolUse "Budget de tâche : 50 % consommé (${c}/${b} % de la fenêtre 5 h, plafond à ${cap} %). Garde un rythme compatible avec le plafond." ;;
     80)  emit PostToolUse "Budget de tâche : 80 % consommé (${c}/${b} % de la fenêtre 5 h, plafond à ${cap} %). Il reste peu : va à l'essentiel, prépare une conclusion." ;;
-    100) emit PostToolUse "Budget de tâche : plafond atteint (${c}/${b} % de la fenêtre 5 h, plafond à ${cap} %). Arrête-toi proprement : termine l'action en cours, ne lance pas de nouvelle étape, résume où tu en es et ce qui reste à faire." ;;
+    100) emit PostToolUse "Budget de tâche : plafond atteint (${c}/${b} % de la fenêtre 5 h, plafond à ${cap} %). Arrête-toi à la fin de cette étape, ne lance rien de nouveau, résume où tu en es et ce qui reste, puis demande à l'utilisateur : budget:finish (terminer l'étape), budget:N (nouveau plafond) ou budget:off (tâche terminée)." ;;
   esac
+}
+
+# Lock: from 90 % of the budget every tool is denied, unless "budget:finish" granted it for
+# this turn. Reads the state and quota files only; silent below 90 % and whenever data is missing.
+pre_mode() {
+  local in sid f m c b pct cap q used reset left at who=""
+  in=$(cat)
+  sid=$(jq -r '.session_id // empty' <<<"$in" 2>/dev/null)
+  valid_sid "$sid" || exit 0
+  f="$BUDGET_DIR/$sid.json"
+  [ -f "$f" ] || exit 0
+  jq -e '.grant == true' "$f" >/dev/null 2>&1 && exit 0
+  m=$(measure "$f"); [ -n "$m" ] || exit 0
+  set -- $m; c=$1; b=$2; pct=$3; cap=$4
+  [ "$(jq -n --argjson p "$pct" '$p >= 90')" = true ] || exit 0
+
+  q=$(quota)
+  set -- $q; used=$1; reset=$2
+  left=$(jq -n --argjson u "$used" '100 - $u | floor')
+  at=$(date -d "@$reset" +%H:%M 2>/dev/null)
+  [ -n "$(jq -r '.agent_id // empty' <<<"$in" 2>/dev/null)" ] && who=" Tu es un sous-agent : rends la main à l'orchestrateur avec ce constat, il demandera à l'utilisateur."
+  emit_deny "Budget de tâche à ${c}/${b} % (plafond ${cap} %), fenêtre 5 h : ${left} % restants jusqu'à ${at}. Outil refusé. Arrête l'étape, résume où tu en es et demande à l'utilisateur de choisir : budget:finish (terminer l'étape en cours), budget:N (nouveau plafond de N %) ou budget:off (tâche terminée).${who}"
+}
+
+stop_mode() {
+  local in sid f tmp
+  in=$(cat)
+  sid=$(jq -r '.session_id // empty' <<<"$in" 2>/dev/null)
+  valid_sid "$sid" || exit 0
+  f="$BUDGET_DIR/$sid.json"
+  [ -f "$f" ] || exit 0
+  jq -e '.grant == true' "$f" >/dev/null 2>&1 || exit 0
+  tmp="$f.tmp.$$"
+  jq 'del(.grant)' "$f" > "$tmp" && mv "$tmp" "$f" || rm -f "$tmp"
 }
 
 status_mode() {
@@ -127,6 +178,8 @@ status_mode() {
 case "$1" in
   prompt) prompt_mode ;;
   tool)   tool_mode ;;
+  pre)    pre_mode ;;
+  stop)   stop_mode ;;
   status) status_mode "$2" ;;
   *)      exit 0 ;;
 esac
