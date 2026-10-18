@@ -305,7 +305,15 @@ Non vu en réel : `budget:finish` (levée puis retombée à la fin du tour),
    `/clear`, `/compact`, `budget:` hors début, double pose, préfixe sans tâche),
    formule de réinitialisation jamais vue en réel, blocage par `Stop`.
 
-6. **Renommer `budget` en `count`** (décidé : périmètre complet, pas seulement le
+6. **Adapter aux agents Hermes qui utilisent la subscription Claude** (à examiner,
+   décision de conception, rien d'observé). Ces agents consomment la même
+   fenêtre 5 h globale du compte. Questions ouvertes : passent-ils par Claude
+   Code, donc par les hooks et la status line, ou par un autre client ? Sans
+   hooks Claude Code, ni le préfixe, ni le verrou, ni le segment `task` ne
+   s'appliquent, et il faudrait un autre point d'accroche. Lien avec le point 3 :
+   un compteur par session (tokens du transcript) pourrait convenir à des agents
+   sans status line.
+7. **Renommer `budget` en `count`** (décidé : périmètre complet, pas seulement le
    préfixe). Touche le préfixe tapé (`count:N`, `count:off`, `count:finish`), les
    messages injectés, les noms de fichiers, les commandes de hooks dans
    `settings.json`, le dépôt et le submodule de `ai-tools`. **Décidé : pas d'alias**
