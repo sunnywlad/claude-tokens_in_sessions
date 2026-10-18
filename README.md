@@ -1,4 +1,4 @@
-# claude-session-budget
+# claude-tokens_in_sessions
 
 [Français](#français) · [English](#english)
 
@@ -298,8 +298,9 @@ Non vu en réel : `count:finish` (levée puis retombée à la fin du tour),
    `~/.claude/count/`, messages injectés ("Compte de tâche"), commandes de hooks
    dans `settings.json`. Anciens fichiers de `~/.claude/` supprimés. Tests écrits rouges d'abord (62 échecs), puis verts (106).
    **Pas d'alias** `budget:` : un `budget:5` tapé par réflexe est ignoré en
-   silence. Reste : voir un `count:3` en réel dans une session neuve ; renommer le dépôt (nom `claude-session-budget`, remote
-   GitHub, submodule de `ai-tools`) ; pousser, seulement sur ordre. Le mot
+   silence. Reste : voir un `count:3` en réel dans une session neuve ; pousser, seulement sur ordre. Dépôt renommé `claude-tokens_in_sessions` (GitHub, dossier
+   local, remote, `.gitmodules` d'`ai-tools`, modification non committée là-bas ; le pointeur du
+   submodule reste à `cf44e0f`). Le mot
    « budget » reste dans la prose de ce README pour le concept. Les préfixes
    d'essai sont désormais `count:3` et `count:5`.
 4. **Comptage par session** (à étudier, décision de conception). Aujourd'hui le
