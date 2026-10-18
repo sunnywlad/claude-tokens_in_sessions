@@ -7,7 +7,7 @@ size=$(echo "$input" | jq -r '.context_window.context_window_size // 0')
 sid=$(echo "$input" | jq -r '.session_id // empty')
 name=$(jq -rs --arg sid "$sid" '.[] | select(.sessionId==$sid) | .name' ~/.claude/sessions/*.json 2>/dev/null | head -n1)
 [ -z "$name" ] && name=$(echo "$input" | jq -r '.session_name // empty')
-now="${BUDGET_NOW:-$(date +%s)}"
+now="${COUNT_NOW:-$(date +%s)}"
 used5=$(echo "$input" | jq -r '.rate_limits.five_hour.used_percentage // empty')
 reset5=$(echo "$input" | jq -r '.rate_limits.five_hour.resets_at // empty | floor' 2>/dev/null)
 # An idle session's rate_limits are stale: show the freshest window quota.json knows
@@ -97,10 +97,10 @@ if [ -n "$used5" ] || [ -n "$pace" ]; then
   fi
 fi
 
-# Task budget segment: green < 80 % of the budget, orange 80-100 %, red beyond; absent without a budget
+# Task count segment: green < 80 % of the count, orange 80-100 %, red beyond; absent without a count
 task=""
 if [ -n "$sid" ]; then
-  tb=$(bash "${BUDGET_SH:-$HOME/.claude/budget.sh}" status "$sid" 2>/dev/null)
+  tb=$(bash "${COUNT_SH:-$HOME/.claude/count.sh}" status "$sid" 2>/dev/null)
   if [ -n "$tb" ]; then
     set -- $tb
     tc=$(echo "$3" | jq -R 'tonumber | if . < 80 then 0 elif . <= 100 then 1 else 2 end')

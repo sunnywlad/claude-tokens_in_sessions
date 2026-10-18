@@ -5,7 +5,7 @@
 ## Français
 
 Un plafond de consommation par session Claude Code, sur la fenêtre de 5 h.
-Tu tapes `budget:25` en début de prompt : la session sait qu'elle dispose de
+Tu tapes `count:25` en début de prompt : la session sait qu'elle dispose de
 25 % de la fenêtre, reçoit un rappel à 50, 80 et 100 %, et la status line
 affiche `task 12/25`. Aucun blocage dur : au plafond, la session est invitée à
 s'arrêter proprement et à résumer où elle en est.
@@ -18,18 +18,18 @@ Trois éléments, un fichier d'état par session.
 
 | Élément | Rôle |
 |---|---|
-| `budget.sh prompt` (hook `UserPromptSubmit`) | Repère le préfixe `budget:N` ou `budget:off`, lit `quota.json`, écrit l'état de la session, injecte la phrase de budget. |
-| `budget.sh tool` (hook `PostToolUse`, sans matcher) | Relit `quota.json`, injecte un rappel quand la consommation franchit 50, 80 ou 100 % du budget, une seule fois par seuil. |
-| `budget.sh pre` (hook `PreToolUse`, sans matcher) | Verrou : dès 90 % du budget, refuse tout outil (sous-agents compris, même `session_id`) avec une raison courte : consommation, reste de la fenêtre 5 h, heure de réinitialisation, et les trois réponses possibles. Silencieux sinon, et sans autorisation `finish` active. |
-| `budget.sh stop` (hook `Stop`) | Termine une autorisation `budget:finish` à la fin du tour. |
+| `count.sh prompt` (hook `UserPromptSubmit`) | Repère le préfixe `count:N` ou `count:off`, lit `quota.json`, écrit l'état de la session, injecte la phrase de budget. |
+| `count.sh tool` (hook `PostToolUse`, sans matcher) | Relit `quota.json`, injecte un rappel quand la consommation franchit 50, 80 ou 100 % du budget, une seule fois par seuil. |
+| `count.sh pre` (hook `PreToolUse`, sans matcher) | Verrou : dès 90 % du budget, refuse tout outil (sous-agents compris, même `session_id`) avec une raison courte : consommation, reste de la fenêtre 5 h, heure de réinitialisation, et les trois réponses possibles. Silencieux sinon, et sans autorisation `finish` active. |
+| `count.sh stop` (hook `Stop`) | Termine une autorisation `count:finish` à la fin du tour. |
 | `statusline.sh` | Écrit `quota.json` à chaque exécution, affiche la consommation de la fenêtre (`5h 19%`, le pourcentage utilisé, pas le reste) et le segment `task` (vert sous 80 %, orange de 80 à 100 %, rouge au-delà). |
 
 Chaîne de données : la status line reçoit `rate_limits` de Claude Code et le
 persiste dans `~/.claude/quota.json` (écriture atomique). Les hooks lisent ce
-fichier. L'état de chaque session vit dans `~/.claude/budget/<session_id>.json`
+fichier. L'état de chaque session vit dans `~/.claude/count/<session_id>.json`
 (`start`, `cap`, `resets_at`, `fired`), écrit seulement par cette session.
 
-`budget.sh status SID` sert à la status line : il imprime
+`count.sh status SID` sert à la status line : il imprime
 `consommé budget pourcentage`, ou rien.
 
 ### Règles de calcul
@@ -49,24 +49,24 @@ fichier. L'état de chaque session vit dans `~/.claude/budget/<session_id>.json`
 - États de plus de 24 h : purgés au prochain prompt de n'importe quelle session.
 - Verrou à 90 % du budget : la session s'arrête et demande à l'utilisateur de
   choisir. Trois réponses, à taper en début de prompt :
-  `budget:finish` (terminer l'étape en cours ; l'autorisation tombe à la fin du
-  tour), `budget:N` (nouveau plafond de N points à partir de la consommation
-  actuelle, état neuf), `budget:off` (tâche terminée : l'état est supprimé, le
+  `count:finish` (terminer l'étape en cours ; l'autorisation tombe à la fin du
+  tour), `count:N` (nouveau plafond de N points à partir de la consommation
+  actuelle, état neuf), `count:off` (tâche terminée : l'état est supprimé, le
   segment `task` disparaît). Un message ordinaire ne lève pas le verrou : le
   hook `UserPromptSubmit` le refuse (`decision: "block"`), sans coût modèle, et
-  ne laisse passer que les préfixes `budget:`. La raison s'affiche à
+  ne laisse passer que les préfixes `count:`. La raison s'affiche à
   l'utilisateur seulement, Claude ne la reçoit pas.
 - Fin de tâche : le segment `task` reste affiché tant que l'utilisateur n'a pas
-  tapé `budget:off` (ou posé un nouveau `budget:N`) ; la phrase de pose demande à
-  la session de lui proposer `budget:off` quand la tâche est terminée.
-- Le préfixe `budget:N` n'est pas retiré du prompt : la doc des hooks ne permet
+  tapé `count:off` (ou posé un nouveau `count:N`) ; la phrase de pose demande à
+  la session de lui proposer `count:off` quand la tâche est terminée.
+- Le préfixe `count:N` n'est pas retiré du prompt : la doc des hooks ne permet
   pas de réécrire le prompt.
-- `budget:N` doit être au tout début du prompt (espaces permis) et N un entier
+- `count:N` doit être au tout début du prompt (espaces permis) et N un entier
   strictement positif.
 
 ### Installation
 
-1. Copier `budget.sh` et `statusline.sh` dans `~/.claude/`. Si tu as déjà une
+1. Copier `count.sh` et `statusline.sh` dans `~/.claude/`. Si tu as déjà une
    status line, ne garde que le bloc qui écrit `quota.json` et le bloc `task`
    avant le `printf` final.
 2. Dans `~/.claude/settings.json`, fusionner (sans remplacer les hooks existants) :
@@ -75,16 +75,16 @@ fichier. L'état de chaque session vit dans `~/.claude/budget/<session_id>.json`
 {
   "hooks": {
     "UserPromptSubmit": [
-      { "hooks": [{ "type": "command", "command": "bash ~/.claude/budget.sh prompt", "timeout": 10 }] }
+      { "hooks": [{ "type": "command", "command": "bash ~/.claude/count.sh prompt", "timeout": 10 }] }
     ],
     "PreToolUse": [
-      { "hooks": [{ "type": "command", "command": "bash ~/.claude/budget.sh pre", "timeout": 10 }] }
+      { "hooks": [{ "type": "command", "command": "bash ~/.claude/count.sh pre", "timeout": 10 }] }
     ],
     "PostToolUse": [
-      { "hooks": [{ "type": "command", "command": "bash ~/.claude/budget.sh tool", "timeout": 10 }] }
+      { "hooks": [{ "type": "command", "command": "bash ~/.claude/count.sh tool", "timeout": 10 }] }
     ],
     "Stop": [
-      { "hooks": [{ "type": "command", "command": "bash ~/.claude/budget.sh stop", "timeout": 10 }] }
+      { "hooks": [{ "type": "command", "command": "bash ~/.claude/count.sh stop", "timeout": 10 }] }
     ]
   },
   "statusLine": { "type": "command", "command": "bash ~/.claude/statusline.sh", "refreshInterval": 60 }
@@ -99,7 +99,7 @@ fichier. L'état de chaque session vit dans `~/.claude/budget/<session_id>.json`
 ### Tests automatiques
 
 ```
-bash test-budget.sh
+bash test-count.sh
 ```
 
 106 vérifications, dans un `$HOME` temporaire, sans toucher à ta configuration :
@@ -112,7 +112,7 @@ refus du prompt au verrou, fusion de `quota.json` (valeur périmée
 ignorée, nouvelle fenêtre prise), affichage d'une session inactive (le plus frais
 des deux, stdin ou `quota.json`).
 Variables de substitution utilisées par les
-tests : `BUDGET_DIR`, `QUOTA_FILE`, `BUDGET_NOW`.
+tests : `COUNT_DIR`, `QUOTA_FILE`, `COUNT_NOW`.
 
 ### Ce qui reste à tester dans une vraie session
 
@@ -122,12 +122,12 @@ ont été vus en session réelle le 2026-10-18 (voir la section suivante).
 1. Recharger les hooks (`/hooks` ou redémarrage), ouvrir une session neuve et
    envoyer un message ordinaire (les `rate_limits` n'existent qu'après la
    première réponse API).
-2. Envoyer `budget:3 lis une dizaine de fichiers et résume-les`. Attendu :
+2. Envoyer `count:3 lis une dizaine de fichiers et résume-les`. Attendu :
    segment `task 0/3` vert ; la session sait citer la phrase de budget ;
-   `cat ~/.claude/budget/*.json` montre l'état.
+   `cat ~/.claude/count/*.json` montre l'état.
 3. Laisser consommer. Attendu : `task` passe à l'orange puis au rouge ; rappels à
    50, 80 et 100 % une seule fois chacun ; au plafond la session s'arrête et résume.
-4. Envoyer `budget:off`. Attendu : fichier d'état supprimé, segment absent.
+4. Envoyer `count:off`. Attendu : fichier d'état supprimé, segment absent.
 5. Points ouverts, à trancher par l'expérience :
    - **Reprise** : le `session_id` reste-t-il le même avec `--resume` ? La doc
      ne le dit pas. Lancer un budget, quitter, rouvrir avec `--resume`, regarder
@@ -139,12 +139,12 @@ ont été vus en session réelle le 2026-10-18 (voir la section suivante).
    - **Format** de `used_percentage` : entier ou décimal ; les deux sont gérés,
      seul l'entier a été vu.
 6. Diagnostic : `claude --debug` montre l'exécution des hooks. À la main :
-   `echo '{"session_id":"x","prompt":"budget:3 test"}' | bash ~/.claude/budget.sh prompt`
-   (supprimer ensuite `~/.claude/budget/x.json`).
+   `echo '{"session_id":"x","prompt":"count:3 test"}' | bash ~/.claude/count.sh prompt`
+   (supprimer ensuite `~/.claude/count/x.json`).
 
 ### Observé en session réelle (2026-10-18)
 
-Établi par l'expérience, avec `budget:3` sur une fenêtre neuve (départ 4 %).
+Établi par l'expérience, avec `count:3` sur une fenêtre neuve (départ 4 %).
 
 - **Pose** : le hook `UserPromptSubmit` a injecté la phrase de budget, que la
   session a pu citer mot pour mot. Le `session_id` de l'état est celui de la
@@ -170,7 +170,7 @@ ont été vus en session réelle le 2026-10-18 (voir la section suivante).
 - **Format de `quota.json`** : entiers observés pour `used_percentage` ;
   `resets_at` en secondes epoch, stable dans la fenêtre. Le fichier contient
   aussi `seven_day_used_percentage` et `seven_day_resets_at`, ignorés par
-  `budget.sh`.
+  `count.sh`.
 - **Réinitialisation de fenêtre** : survenue entre deux relevés (18 puis 4),
   avant la pose. Aucune réinitialisation pendant une tâche budgétée : la
   formule reste non vérifiée en réel.
@@ -197,7 +197,7 @@ ont été vus en session réelle le 2026-10-18 (voir la section suivante).
   consomment donc le budget du parent, comportement voulu. Un sous-agent de
   quatre appels (modèle haiku) a coûté 1 point de fenêtre sur 5.
 - **Outil en échec** : un `Read` sur un fichier inexistant a un `PreToolUse` et
-  aucun `PostToolUse`. `budget.sh tool` ne voit pas les outils en échec.
+  aucun `PostToolUse`. `count.sh tool` ne voit pas les outils en échec.
 - **`PostToolUse` de l'outil `Agent`** : tiré au lancement du sous-agent, pas à
   sa fin.
 - **Fausse réinitialisation** : toute exécution de `statusline.sh` réécrit
@@ -214,16 +214,16 @@ et un message qui disait « termine l'action en cours », donc autorisait à
 continuer. Réponse : le verrou `PreToolUse` à 90 %.
 
 Vu en réel : un `Bash` refusé avec la raison complète reçue (consommation, reste
-de la fenêtre, heure de réinitialisation, trois réponses), puis `budget:off`
+de la fenêtre, heure de réinitialisation, trois réponses), puis `count:off`
 qui lève le verrou et supprime l'état. Le verrou ne touche que les outils : la
 session continue de répondre en texte, ce qui coûte de la fenêtre.
 Attention : le verrou bloque aussi `Edit` et `Write`, donc la session qui le
 déclenche ne peut plus rien écrire avant `finish`, `N` ou `off`.
 
-Vu en réel, troisième passe (`budget:3`, départ 41 %, plafond 44 %) :
+Vu en réel, troisième passe (`count:3`, départ 41 %, plafond 44 %) :
 - **Prompt refusé au verrou** : un « salut » sans préfixe a affiché
   `UserPromptSubmit operation blocked by hook`, la raison, puis
-  `Original prompt: salut`. Le texte reste dans la zone de saisie. `budget:off`
+  `Original prompt: salut`. Le texte reste dans la zone de saisie. `count:off`
   passe et lève le verrou.
 - **Rappel 50 %** : reçu à `2/3`, sur le `PostToolUse` d'un lot de trois `Read`.
 - **Rappel 100 %** : non reçu. Le verrou `PreToolUse` a vu 3/3 avant que le
@@ -266,7 +266,7 @@ branche d'écriture de `quota.json`, retirées ensuite) :
 - **Correctif** (test rouge d'abord, 5 tests) : dans la même fenêtre (`resets_at`
   à moins de 60 s), une valeur plus basse ne remplace pas la valeur stockée ; une
   fenêtre plus ancienne est ignorée ; une fenêtre plus récente remplace. Seule
-  la fenêtre 5 h est protégée, `seven_day_*` n'est pas lu par `budget.sh`.
+  la fenêtre 5 h est protégée, `seven_day_*` n'est pas lu par `count.sh`.
 - **À vérifier en réel** : le fichier ne régresse plus avec plusieurs sessions
   ouvertes (relevé après coup, pas encore fait avec le correctif actif).
 
@@ -274,13 +274,13 @@ Limite de conception, non notée avant : le budget est un écart de
 `used_percentage`, pourcentage global du compte. La consommation d'une autre
 session fait avancer `task` (voir le point 4 de la prochaine session).
 
-Non vu en réel : `budget:finish` (levée puis retombée à la fin du tour),
-`budget:N` après verrou, sous-agent refusé et message à l'orchestrateur.
+Non vu en réel : `count:finish` (levée puis retombée à la fin du tour),
+`count:N` après verrou, sous-agent refusé et message à l'orchestrateur.
 
 ### Prochaine session, dans cet ordre
 
 1. **Refuser le prompt au verrou : fait et vu en réel** (2026-10-18). Seuls les
-   préfixes `budget:` passent. Reste à éprouver : `/clear` ou une commande
+   préfixes `count:` passent. Reste à éprouver : `/clear` ou une commande
    intégrée passe-t-elle par ce hook (supposé que non).
 2. **Status line figée sur une session au repos : corrigé et vu en réel**
    (2026-10-18, quatrième et cinquième passes). L'écran se repeint bien (horloge
@@ -292,15 +292,18 @@ Non vu en réel : `budget:finish` (levée puis retombée à la fin du tour),
    rattrapé le `5h` de l'active à la minute suivante, sans rien taper dedans
    (script pris en compte à chaud). Limite : une session seule, sans autre session active, ne se met à
    jour que par ses propres appels.
-3. **Renommer `budget` en `count`** : prochaine étape (décidé : périmètre complet,
-   pas seulement le préfixe). Touche le préfixe tapé (`count:N`, `count:off`,
-   `count:finish`), les messages injectés, les noms de fichiers, les commandes de
-   hooks dans `settings.json`, le dépôt et le submodule de `ai-tools`. **Décidé :
-   pas d'alias** `budget:`. Un `budget:5` tapé par réflexe sera ignoré en silence,
-   à garder en tête. Le renommage change les chemins des fichiers actifs, donc
-   recopier et recharger avec soin ; pousser le dépôt et le pointeur du submodule
-   seulement sur ordre. Tests rouges d'abord. Après lui, les préfixes d'essai
-   deviennent `count:3` et `count:5`.
+3. **Renommer `budget` en `count` : fait en local, pas encore vu en réel**
+   (2026-10-18). Fichiers `count.sh` et `test-count.sh`, préfixe `count:N`,
+   `count:off`, `count:finish`, variables `COUNT_*`, dossier d'état
+   `~/.claude/count/`, messages injectés ("Compte de tâche"), commandes de hooks
+   dans `settings.json`. Tests écrits rouges d'abord (62 échecs), puis verts (106).
+   **Pas d'alias** `budget:` : un `budget:5` tapé par réflexe est ignoré en
+   silence. Reste : voir un `count:3` en réel dans une session neuve ; supprimer
+   les anciens `~/.claude/budget.sh`, `test-budget.sh` et le dossier
+   `~/.claude/budget/` ; renommer le dépôt (nom `claude-session-budget`, remote
+   GitHub, submodule de `ai-tools`) ; pousser, seulement sur ordre. Le mot
+   « budget » reste dans la prose de ce README pour le concept. Les préfixes
+   d'essai sont désormais `count:3` et `count:5`.
 4. **Comptage par session** (à étudier, décision de conception). Aujourd'hui le
    budget est un écart de `used_percentage`, pourcentage global du compte : la
    consommation d'une autre session fait avancer `task`. Piste : sommer les
@@ -322,15 +325,15 @@ Non vu en réel : `budget:finish` (levée puis retombée à la fin du tour),
    un compteur par session (tokens du transcript) pourrait convenir à des agents
    sans status line.
 
-Règles de la passe : un point à la fois, `budget:3` ou `budget:5` pour les essais,
+Règles de la passe : un point à la fois, `count:3` ou `count:5` pour les essais,
 aucun lancement manuel de `statusline.sh` avec de fausses valeurs, pas de
 mémoire locale (tout vit ici).
 
 ### Pour qu'une autre session reprenne le travail
 
-- Lire `budget.sh` en entier (environ 130 lignes) puis `test-budget.sh`.
+- Lire `count.sh` en entier (environ 130 lignes) puis `test-count.sh`.
 - Toute modification de comportement commence par un test qui échoue dans
-  `test-budget.sh`.
+  `test-count.sh`.
 - Ce dépôt contient des copies : les fichiers actifs sont ceux de `~/.claude/`.
   Après une modification, recopier dans les deux sens.
 - Sources vérifiées dans la doc officielle des hooks (code.claude.com/docs/en/hooks) :
@@ -344,27 +347,27 @@ mémoire locale (tout vit ici).
 ## English
 
 A per-session consumption cap for Claude Code on the 5-hour rate-limit window.
-Start a prompt with `budget:25`: the session is told it has 25% of the window,
+Start a prompt with `count:25`: the session is told it has 25% of the window,
 gets a reminder at 50, 80 and 100% of that budget, and the status line shows
 `task 12/25`. There is no hard block: at the cap the session is asked to stop
 cleanly and summarise where it stands.
 
 Bash and `jq` only.
 
-- `budget.sh prompt` (`UserPromptSubmit` hook) parses the prefix, reads
+- `count.sh prompt` (`UserPromptSubmit` hook) parses the prefix, reads
   `quota.json`, stores per-session state, injects the budget sentence.
-- `budget.sh tool` (`PostToolUse` hook, no matcher) injects a reminder once per
+- `count.sh tool` (`PostToolUse` hook, no matcher) injects a reminder once per
   threshold (50, 80, 100%).
 - `statusline.sh` writes `quota.json` (the status line is the only place
   `rate_limits` is exposed) and renders the `task` segment (green below 80%,
   orange 80 to 100%, red beyond).
-- State lives in `~/.claude/budget/<session_id>.json`, one file per session,
+- State lives in `~/.claude/count/<session_id>.json`, one file per session,
   written atomically, purged after 24 h.
 - If the 5-hour window resets mid-task, consumption is `(100 - start) + current`.
 - Missing, empty, malformed or stale `quota.json`: nothing is invented, nothing
   is injected.
-- The `budget:N` prefix stays in the prompt: hooks cannot rewrite it.
+- The `count:N` prefix stays in the prompt: hooks cannot rewrite it.
 
-Install: see the settings snippet above. Tests: `bash test-budget.sh` (106 checks
+Install: see the settings snippet above. Tests: `bash test-count.sh` (106 checks
 in a throwaway `$HOME`). The French section lists what is still unverified in a
 live session (resume, subagents, update lag).
