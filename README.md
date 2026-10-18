@@ -272,7 +272,7 @@ branche d'écriture de `quota.json`, retirées ensuite) :
 
 Limite de conception, non notée avant : le budget est un écart de
 `used_percentage`, pourcentage global du compte. La consommation d'une autre
-session fait avancer `task` (voir le point 3 de la prochaine session).
+session fait avancer `task` (voir le point 4 de la prochaine session).
 
 Non vu en réel : `budget:finish` (levée puis retombée à la fin du tour),
 `budget:N` après verrou, sous-agent refusé et message à l'orchestrateur.
@@ -292,35 +292,35 @@ Non vu en réel : `budget:finish` (levée puis retombée à la fin du tour),
    rattrapé le `5h` de l'active à la minute suivante, sans rien taper dedans
    (script pris en compte à chaud). Limite : une session seule, sans autre session active, ne se met à
    jour que par ses propres appels.
-3. **Comptage par session** (à étudier, décision de conception). Aujourd'hui le
+3. **Renommer `budget` en `count`** : prochaine étape (décidé : périmètre complet,
+   pas seulement le préfixe). Touche le préfixe tapé (`count:N`, `count:off`,
+   `count:finish`), les messages injectés, les noms de fichiers, les commandes de
+   hooks dans `settings.json`, le dépôt et le submodule de `ai-tools`. **Décidé :
+   pas d'alias** `budget:`. Un `budget:5` tapé par réflexe sera ignoré en silence,
+   à garder en tête. Le renommage change les chemins des fichiers actifs, donc
+   recopier et recharger avec soin ; pousser le dépôt et le pointeur du submodule
+   seulement sur ordre. Tests rouges d'abord. Après lui, les préfixes d'essai
+   deviennent `count:3` et `count:5`.
+4. **Comptage par session** (à étudier, décision de conception). Aujourd'hui le
    budget est un écart de `used_percentage`, pourcentage global du compte : la
    consommation d'une autre session fait avancer `task`. Piste : sommer les
    tokens du transcript (`transcript_path`) pour isoler la session, en gardant
    le pourcentage global pour la fenêtre. Inconnus : conversion tokens en points
    de fenêtre (cache, modèle), tokens des sous-agents absents ou non du transcript
    parent. Observé : le transcript porte des tokens par message. Supposé : le reste.
-4. **Outils en échec** : `PostToolUseFailure` (un `Read` sur un fichier absent n'a
-   que `PreToolUse`). `budget:3` suffit.
-5. Rappel et refus côté sous-agent, `--resume`, les cas du point 8 (deux sessions,
-   `/clear`, `/compact`, `budget:` hors début, double pose, préfixe sans tâche),
+5. **Outils en échec** : `PostToolUseFailure` (un `Read` sur un fichier absent n'a
+   que `PreToolUse`). Un petit budget suffit pour l'essai.
+6. Rappel et refus côté sous-agent, `--resume`, les cas du point 8 (deux sessions,
+   `/clear`, `/compact`, préfixe hors début, double pose, préfixe sans tâche),
    formule de réinitialisation jamais vue en réel, blocage par `Stop`.
-
-6. **Adapter aux agents Hermes qui utilisent la subscription Claude** (à examiner,
+7. **Adapter aux agents Hermes qui utilisent la subscription Claude** (à examiner,
    décision de conception, rien d'observé). Ces agents consomment la même
    fenêtre 5 h globale du compte. Questions ouvertes : passent-ils par Claude
    Code, donc par les hooks et la status line, ou par un autre client ? Sans
    hooks Claude Code, ni le préfixe, ni le verrou, ni le segment `task` ne
-   s'appliquent, et il faudrait un autre point d'accroche. Lien avec le point 3 :
+   s'appliquent, et il faudrait un autre point d'accroche. Lien avec le point 4 :
    un compteur par session (tokens du transcript) pourrait convenir à des agents
    sans status line.
-7. **Renommer `budget` en `count`** (décidé : périmètre complet, pas seulement le
-   préfixe). Touche le préfixe tapé (`count:N`, `count:off`, `count:finish`), les
-   messages injectés, les noms de fichiers, les commandes de hooks dans
-   `settings.json`, le dépôt et le submodule de `ai-tools`. **Décidé : pas d'alias**
-   `budget:`. Un `budget:5` tapé par réflexe sera ignoré en silence, à garder en
-   tête. À faire en dernier : le renommage change les chemins des
-   fichiers actifs, donc recopier et recharger avec soin ; pousser le dépôt et
-   le pointeur du submodule seulement sur ordre. Tests rouges d'abord.
 
 Règles de la passe : un point à la fois, `budget:3` ou `budget:5` pour les essais,
 aucun lancement manuel de `statusline.sh` avec de fausses valeurs, pas de
