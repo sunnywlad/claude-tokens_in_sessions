@@ -48,6 +48,19 @@ emit_deny() { # emit_deny REASON
   jq -n --arg r "$1" '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: $r}}'
 }
 
+emit_block() { # emit_block REASON
+  jq -n --arg r "$1" '{decision: "block", reason: $r}'
+}
+
+# True when the session's budget is at 90 % or more and no "finish" grant is active.
+locked() { # locked STATE_FILE
+  local m
+  jq -e '.grant == true' "$1" >/dev/null 2>&1 && return 1
+  m=$(measure "$1"); [ -n "$m" ] || return 1
+  set -- $m
+  [ "$(jq -n --argjson p "$3" '$p >= 90')" = true ]
+}
+
 valid_sid() { [[ $1 =~ ^[A-Za-z0-9_-]+$ ]]; }
 
 prompt_mode() {
@@ -60,7 +73,12 @@ prompt_mode() {
   # within 24 h (same session_id assumed; unverified), otherwise it is purged here.
   find "$BUDGET_DIR" -name '*.json' -mmin +"$STALE_MIN" -delete 2>/dev/null
 
-  [[ $prompt =~ ^[[:space:]]*budget:(off|finish|[1-9][0-9]*)([[:space:]]|$) ]] || exit 0
+  if ! [[ $prompt =~ ^[[:space:]]*budget:(off|finish|[1-9][0-9]*)([[:space:]]|$) ]]; then
+    if [ -f "$BUDGET_DIR/$sid.json" ] && locked "$BUDGET_DIR/$sid.json"; then
+      emit_block "Budget de tâche à 90 % ou plus : prompt refusé, aucun coût. Réponds par budget:finish (terminer l'étape en cours), budget:N (nouveau plafond de N %) ou budget:off (tâche terminée)."
+    fi
+    exit 0
+  fi
   n=${BASH_REMATCH[1]}
   f="$BUDGET_DIR/$sid.json"
 

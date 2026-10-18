@@ -52,7 +52,10 @@ fichier. L'état de chaque session vit dans `~/.claude/budget/<session_id>.json`
   `budget:finish` (terminer l'étape en cours ; l'autorisation tombe à la fin du
   tour), `budget:N` (nouveau plafond de N points à partir de la consommation
   actuelle, état neuf), `budget:off` (tâche terminée : l'état est supprimé, le
-  segment `task` disparaît). Un message ordinaire ne lève pas le verrou.
+  segment `task` disparaît). Un message ordinaire ne lève pas le verrou : le
+  hook `UserPromptSubmit` le refuse (`decision: "block"`), sans coût modèle, et
+  ne laisse passer que les préfixes `budget:`. La raison s'affiche à
+  l'utilisateur seulement, Claude ne la reçoit pas.
 - Fin de tâche : le segment `task` reste affiché tant que l'utilisateur n'a pas
   tapé `budget:off` (ou posé un nouveau `budget:N`) ; la phrase de pose demande à
   la session de lui proposer `budget:off` quand la tâche est terminée.
@@ -99,12 +102,13 @@ fichier. L'état de chaque session vit dans `~/.claude/budget/<session_id>.json`
 bash test-budget.sh
 ```
 
-86 vérifications, dans un `$HOME` temporaire, sans toucher à ta configuration :
+96 vérifications, dans un `$HOME` temporaire, sans toucher à ta configuration :
 pose, plafond borné, fenêtre pleine, quota inutilisable (absent, vide,
 malformé, périmé), `off`, seuils une seule fois, saut de seuils, réinitialisation
 de fenêtre, gigue de `resets_at`, deux sessions, `session_id` absent ou
 dangereux, entrée illisible, purge par âge, réémission, segment de status line
-(vert, orange, rouge, absent), verrou à 90 %, `finish`, nouveau plafond, `off`.
+(vert, orange, rouge, absent), verrou à 90 %, `finish`, nouveau plafond, `off`,
+refus du prompt au verrou.
 Variables de substitution utilisées par les
 tests : `BUDGET_DIR`, `QUOTA_FILE`, `BUDGET_NOW`.
 
@@ -219,10 +223,11 @@ Non vu en réel : `budget:finish` (levée puis retombée à la fin du tour),
 
 ### Prochaine session, dans cet ordre
 
-1. **Refuser le prompt au verrou.** Lire la section `UserPromptSubmit` de la doc
-   (champ de blocage et son effet sur le prompt), puis test rouge. À trancher
-   avec l'utilisateur : ne laisser passer que les prompts commençant par
-   `budget:`, ou aussi les questions ordinaires.
+1. **Refuser le prompt au verrou : fait dans le code** (tests verts), **pas vu en
+   réel**. Décidé : seuls les préfixes `budget:` passent. À éprouver en session :
+   le blocage s'affiche-t-il avec la raison, le prompt disparaît-il de la zone
+   de saisie (la doc ne le dit pas), et `/clear` ou une commande intégrée
+   passe-t-elle par ce hook (supposé que non).
 2. **Status line figée sur une session au repos.** `refreshInterval: 60` est déjà
    dans `settings.json`, la cause reste à trouver : la status line ne se relance
    peut-être pas sur une session inactive, ou n'est pas réécrite sans événement.
@@ -258,7 +263,10 @@ mémoire locale (tout vit ici).
 - Sources vérifiées dans la doc officielle des hooks (code.claude.com/docs/en/hooks) :
   `session_id` présent dans `UserPromptSubmit` et `PostToolUse` ;
   `hookSpecificOutput.additionalContext` accepté par les deux ;
-  aucun champ pour réécrire le prompt.
+  aucun champ pour réécrire le prompt ;
+  `UserPromptSubmit` peut refuser un prompt (`decision: "block"` + `reason`, ou
+  sortie 2) : le prompt n'atteint pas Claude, `reason` n'est montrée qu'à
+  l'utilisateur, le texte reste dans le transcript et l'historique.
 
 ## English
 
@@ -284,6 +292,6 @@ Bash and `jq` only.
   is injected.
 - The `budget:N` prefix stays in the prompt: hooks cannot rewrite it.
 
-Install: see the settings snippet above. Tests: `bash test-budget.sh` (86 checks
+Install: see the settings snippet above. Tests: `bash test-budget.sh` (96 checks
 in a throwaway `$HOME`). The French section lists what is still unverified in a
 live session (resume, subagents, update lag).

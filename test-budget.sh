@@ -220,5 +220,29 @@ check "set: tells to ask the user before closing the budget" $(echo "$out" | ctx
 quota 31; out=$(tool s1)
 check "100 %: asks the user, offers finish" $(echo "$out" | ctx | grep -q "budget:finish"; echo $?)
 
+# 19. Lock on the prompt: from 90 % only budget: prefixes pass, any other prompt is blocked
+reset; quota 10; prompt s1 "budget:20 go" > /dev/null
+quota 27; out=$(prompt s1 "an ordinary question")
+check "prompt lock: silent at 85 %" $([ -z "$out" ]; echo $?)
+quota 28; out=$(prompt s1 "an ordinary question")
+check "prompt lock: block at 90 %" $([ "$(echo "$out" | jq -r .decision)" = block ]; echo $?)
+reason=$(echo "$out" | jq -r .reason)
+check "prompt lock: reason offers finish, new cap, off" $(echo "$reason" | grep -q "budget:finish" && echo "$reason" | grep -q "budget:N" && echo "$reason" | grep -q "budget:off"; echo $?)
+check "prompt lock: block, no context injected" $([ -z "$(echo "$out" | jq -r '.hookSpecificOutput.additionalContext // empty')" ]; echo $?)
+out=$(prompt s1 "budget:finish")
+check "prompt lock: budget:finish passes" $([ "$(state s1 .grant)" = true ] && [ -z "$(echo "$out" | jq -r '.decision // empty')" ]; echo $?)
+out=$(prompt s1 "an ordinary question")
+check "prompt lock: ordinary prompt passes under a grant" $([ -z "$out" ]; echo $?)
+stopev s1
+out=$(prompt s1 "budget:5 more")
+check "prompt lock: budget:N passes" $([ "$(state s1 .start)" = 28 ] && [ -z "$(echo "$out" | jq -r '.decision // empty')" ]; echo $?)
+quota 28; prompt s1 "budget:off" > /dev/null
+check "prompt lock: budget:off passes" $([ ! -e "$BUDGET_DIR/s1.json" ]; echo $?)
+out=$(prompt s1 "an ordinary question")
+check "prompt lock: no budget, never blocked" $([ -z "$out" ]; echo $?)
+reset; quota 10; prompt s1 "budget:20 go" > /dev/null; quota 29; rm -f "$QUOTA_FILE"
+out=$(prompt s1 "an ordinary question")
+check "prompt lock: quota unusable, never blocked" $([ -z "$out" ]; echo $?)
+
 echo "passed: $pass, failed: $fail"
 [ "$fail" -eq 0 ]
