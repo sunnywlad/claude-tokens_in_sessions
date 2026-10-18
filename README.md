@@ -235,6 +235,15 @@ Non vu en réel : `budget:finish` (levée puis retombée à la fin du tour),
    `/clear`, `/compact`, `budget:` hors début, double pose, préfixe sans tâche),
    formule de réinitialisation jamais vue en réel, blocage par `Stop`.
 
+5. **Renommer `budget` en `count`** (décidé : périmètre complet, pas seulement le
+   préfixe). Touche le préfixe tapé (`count:N`, `count:off`, `count:finish`), les
+   messages injectés, les noms de fichiers, les commandes de hooks dans
+   `settings.json`, le dépôt et le submodule de `ai-tools`. **Question ouverte** :
+   garder `budget:` comme alias ? Sans alias, un `budget:5` tapé par réflexe est
+   ignoré en silence. À faire en dernier : le renommage change les chemins des
+   fichiers actifs, donc recopier et recharger avec soin ; pousser le dépôt et
+   le pointeur du submodule seulement sur ordre. Tests rouges d'abord.
+
 Règles de la passe : un point à la fois, `budget:3` ou `budget:5` pour les essais,
 aucun lancement manuel de `statusline.sh` avec de fausses valeurs, pas de
 mémoire locale (tout vit ici).
