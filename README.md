@@ -292,17 +292,22 @@ Non vu en réel : `count:finish` (levée puis retombée à la fin du tour),
    rattrapé le `5h` de l'active à la minute suivante, sans rien taper dedans
    (script pris en compte à chaud). Limite : une session seule, sans autre session active, ne se met à
    jour que par ses propres appels.
-3. **Renommer `budget` en `count` : fait en local, pas encore vu en réel**
-   (2026-10-18). Fichiers `count.sh` et `test-count.sh`, préfixe `count:N`,
-   `count:off`, `count:finish`, variables `COUNT_*`, dossier d'état
+3. **Renommer `budget` en `count` : fait et vu en réel** (2026-10-19, `count:1`,
+   départ 61 %, plafond 62 %). Fichiers `count.sh` et `test-count.sh`, préfixe
+   `count:N`, `count:off`, `count:finish`, variables `COUNT_*`, dossier d'état
    `~/.claude/count/`, messages injectés ("Compte de tâche"), commandes de hooks
-   dans `settings.json`. Anciens fichiers de `~/.claude/` supprimés. Tests écrits rouges d'abord (62 échecs), puis verts (106).
+   dans `settings.json`, anciens fichiers de `~/.claude/` supprimés. Tests écrits
+   rouges d'abord (62 échecs), puis verts (106). Dépôt renommé
+   `claude-tokens_in_sessions` (GitHub, dossier local, remote, poussé en
+   `6560235`). Modification de `.gitmodules` dans `ai-tools` non committée, le
+   pointeur du submodule reste à `cf44e0f`.
+   Vu en réel : pose (phrase injectée, état écrit, `task 0/1`), consommation
+   (`task 1/1` orange à 62 %), refus du prompt au verrou sous le nouveau préfixe,
+   `count:finish` puis `count:off` acceptés. Non vu : le rappel de 100 % en
+   `PostToolUse` (le verrou a repris la main avant, comme à la troisième passe).
    **Pas d'alias** `budget:` : un `budget:5` tapé par réflexe est ignoré en
-   silence. Reste : voir un `count:3` en réel dans une session neuve ; pousser, seulement sur ordre. Dépôt renommé `claude-tokens_in_sessions` (GitHub, dossier
-   local, remote, `.gitmodules` d'`ai-tools`, modification non committée là-bas ; le pointeur du
-   submodule reste à `cf44e0f`). Le mot
-   « budget » reste dans la prose de ce README pour le concept. Les préfixes
-   d'essai sont désormais `count:3` et `count:5`.
+   silence. Le mot « budget » reste dans la prose de ce README pour le concept.
+   Préfixes d'essai désormais `count:3` et `count:5`.
 4. **Comptage par session** (à étudier, décision de conception). Aujourd'hui le
    budget est un écart de `used_percentage`, pourcentage global du compte : la
    consommation d'une autre session fait avancer `task`. Piste : sommer les
