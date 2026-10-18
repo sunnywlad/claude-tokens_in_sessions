@@ -233,6 +233,37 @@ Vu en réel, troisième passe (`budget:3`, départ 41 %, plafond 44 %) :
 - **Status line** : `task` a avancé (1/3 puis 3/3) pendant la tâche, orange à
   100 %. Pas de figement vu sur une session active.
 
+Vu en réel, quatrième passe (session B ouverte à 22:06, `5h 51%`, laissée au
+repos 24 min ; mesure par une ligne de journal ajoutée à `statusline.sh`, retirée
+ensuite) :
+- **Le script tourne au repos** : une exécution par minute, à seconde fixe, avec
+  `rate_limits` à chaque fois. `used5` a bien suivi 51, 52, 53.
+- **L'écran ne suit pas** : B est restée à `5h 51%` pendant toute la mesure,
+  même au premier plan, même après une frappe dans la zone de saisie.
+- **Un événement de session repeint** : l'envoi d'un message dans B a mis la
+  ligne à jour. Supposé : Claude Code ne repeint qu'après un événement de
+  session, et jette ou ignore la sortie d'un rafraîchissement périodique.
+- **Pas le même chiffre selon la session** : au même instant, `used5` reçu par
+  deux sessions différait de 1 point (B à 52 trois secondes avant l'autre à 51).
+- **Conséquence** : `quota.json` reste frais (la session au repos le réécrit), donc
+  le verrou, qui lit le fichier, ne dépend pas de l'affichage. Seul le segment
+  `task` et le `5h` d'une session au repos sont en retard à l'écran.
+
+Pistes pour le repaint (non essayées) :
+- Vérifier la doc de `statusLine.refreshInterval` : peut-être documente-t-elle
+  ce que le rafraîchissement repeint, ou une version de Claude Code le corrige.
+- Tester si la sortie doit changer pour être repeinte (ex. un champ d'horloge
+  dans la ligne) : si Claude Code compare la sortie, un chiffre inchangé ne
+  repeint rien, mais ici le chiffre changeait.
+- Tester d'autres hooks comme source d'événement : un hook `Notification` ou
+  `SessionStart` ne s'exécute pas au repos, donc sans effet probable.
+- Signaler le comportement à Anthropic (sortie du rafraîchissement périodique
+  non repeinte sur session inactive).
+
+Limite de conception, non notée avant : le budget est un écart de
+`used_percentage`, pourcentage global du compte. La consommation d'une autre
+session fait avancer `task` (voir le point 3 de la prochaine session).
+
 Non vu en réel : `budget:finish` (levée puis retombée à la fin du tour),
 `budget:N` après verrou, sous-agent refusé et message à l'orchestrateur.
 
@@ -241,19 +272,25 @@ Non vu en réel : `budget:finish` (levée puis retombée à la fin du tour),
 1. **Refuser le prompt au verrou : fait et vu en réel** (2026-10-18). Seuls les
    préfixes `budget:` passent. Reste à éprouver : `/clear` ou une commande
    intégrée passe-t-elle par ce hook (supposé que non).
-2. **Status line figée sur une session au repos.** `refreshInterval: 60` est déjà
-   dans `settings.json`, la cause reste à trouver : la status line ne se relance
-   peut-être pas sur une session inactive, ou n'est pas réécrite sans événement.
-   Mesurer sur une session laissée ouverte, sans relevé manuel. Piste : un
-   rafraîchissement de `quota.json` ne profite qu'à la session qui l'écrit ; une
-   session au repos affiche un chiffre en retard.
-3. **Outils en échec** : `PostToolUseFailure` (un `Read` sur un fichier absent n'a
+2. **Status line figée sur une session au repos : mesuré, cause côté Claude Code**
+   (2026-10-18, voir la quatrième passe). Le script est relancé et `quota.json`
+   est réécrit ; c'est l'écran qui ne se repeint pas. Pistes de contournement non
+   essayées : voir « Pistes pour le repaint » plus bas. Reste ouvert, hors de nos
+   fichiers.
+3. **Comptage par session** (à étudier, décision de conception). Aujourd'hui le
+   budget est un écart de `used_percentage`, pourcentage global du compte : la
+   consommation d'une autre session fait avancer `task`. Piste : sommer les
+   tokens du transcript (`transcript_path`) pour isoler la session, en gardant
+   le pourcentage global pour la fenêtre. Inconnus : conversion tokens en points
+   de fenêtre (cache, modèle), tokens des sous-agents absents ou non du transcript
+   parent. Observé : le transcript porte des tokens par message. Supposé : le reste.
+4. **Outils en échec** : `PostToolUseFailure` (un `Read` sur un fichier absent n'a
    que `PreToolUse`). `budget:3` suffit.
-4. Rappel et refus côté sous-agent, `--resume`, les cas du point 8 (deux sessions,
+5. Rappel et refus côté sous-agent, `--resume`, les cas du point 8 (deux sessions,
    `/clear`, `/compact`, `budget:` hors début, double pose, préfixe sans tâche),
    formule de réinitialisation jamais vue en réel, blocage par `Stop`.
 
-5. **Renommer `budget` en `count`** (décidé : périmètre complet, pas seulement le
+6. **Renommer `budget` en `count`** (décidé : périmètre complet, pas seulement le
    préfixe). Touche le préfixe tapé (`count:N`, `count:off`, `count:finish`), les
    messages injectés, les noms de fichiers, les commandes de hooks dans
    `settings.json`, le dépôt et le submodule de `ai-tools`. **Décidé : pas d'alias**
