@@ -282,15 +282,15 @@ Non vu en réel : `budget:finish` (levée puis retombée à la fin du tour),
 1. **Refuser le prompt au verrou : fait et vu en réel** (2026-10-18). Seuls les
    préfixes `budget:` passent. Reste à éprouver : `/clear` ou une commande
    intégrée passe-t-elle par ce hook (supposé que non).
-2. **Status line figée sur une session au repos : corrigé, à voir en réel**
+2. **Status line figée sur une session au repos : corrigé et vu en réel**
    (2026-10-18, quatrième et cinquième passes). L'écran se repeint bien (horloge
    test). Deux causes : des sessions inactives écrasaient `quota.json` avec des
    valeurs périmées (fusion monotone par fenêtre dans `statusline.sh`), et le
    `5h` d'une session inactive restait celui de son stdin périmé : le script
    affiche maintenant le plus frais entre son stdin et `quota.json` (même
-   fenêtre et plus haut, ou fenêtre plus récente). À éprouver : une session
-   active et une inactive, le `5h` de l'inactive doit suivre l'active à la
-   minute. Limite : une session seule, sans autre session active, ne se met à
+   fenêtre et plus haut, ou fenêtre plus récente). Vu en réel : la session B, inactive, a
+   rattrapé le `5h` de l'active à la minute suivante, sans rien taper dedans
+   (script pris en compte à chaud). Limite : une session seule, sans autre session active, ne se met à
    jour que par ses propres appels.
 3. **Comptage par session** (à étudier, décision de conception). Aujourd'hui le
    budget est un écart de `used_percentage`, pourcentage global du compte : la
