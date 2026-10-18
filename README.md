@@ -20,6 +20,8 @@ Trois éléments, un fichier d'état par session.
 |---|---|
 | `budget.sh prompt` (hook `UserPromptSubmit`) | Repère le préfixe `budget:N` ou `budget:off`, lit `quota.json`, écrit l'état de la session, injecte la phrase de budget. |
 | `budget.sh tool` (hook `PostToolUse`, sans matcher) | Relit `quota.json`, injecte un rappel quand la consommation franchit 50, 80 ou 100 % du budget, une seule fois par seuil. |
+| `budget.sh pre` (hook `PreToolUse`, sans matcher) | Verrou : dès 90 % du budget, refuse tout outil (sous-agents compris, même `session_id`) avec une raison courte : consommation, reste de la fenêtre 5 h, heure de réinitialisation, et les trois réponses possibles. Silencieux sinon, et sans autorisation `finish` active. |
+| `budget.sh stop` (hook `Stop`) | Termine une autorisation `budget:finish` à la fin du tour. |
 | `statusline.sh` | Écrit `quota.json` à chaque exécution, affiche la consommation de la fenêtre (`5h 19%`, le pourcentage utilisé, pas le reste) et le segment `task` (vert sous 80 %, orange de 80 à 100 %, rouge au-delà). |
 
 Chaîne de données : la status line reçoit `rate_limits` de Claude Code et le
@@ -45,6 +47,15 @@ fichier. L'état de chaque session vit dans `~/.claude/budget/<session_id>.json`
 - Plusieurs sessions : états séparés par `session_id`, jamais de fichier partagé
   en écriture.
 - États de plus de 24 h : purgés au prochain prompt de n'importe quelle session.
+- Verrou à 90 % du budget : la session s'arrête et demande à l'utilisateur de
+  choisir. Trois réponses, à taper en début de prompt :
+  `budget:finish` (terminer l'étape en cours ; l'autorisation tombe à la fin du
+  tour), `budget:N` (nouveau plafond de N points à partir de la consommation
+  actuelle, état neuf), `budget:off` (tâche terminée : l'état est supprimé, le
+  segment `task` disparaît). Un message ordinaire ne lève pas le verrou.
+- Fin de tâche : le segment `task` reste affiché tant que l'utilisateur n'a pas
+  tapé `budget:off` (ou posé un nouveau `budget:N`) ; la phrase de pose demande à
+  la session de lui proposer `budget:off` quand la tâche est terminée.
 - Le préfixe `budget:N` n'est pas retiré du prompt : la doc des hooks ne permet
   pas de réécrire le prompt.
 - `budget:N` doit être au tout début du prompt (espaces permis) et N un entier
@@ -63,8 +74,14 @@ fichier. L'état de chaque session vit dans `~/.claude/budget/<session_id>.json`
     "UserPromptSubmit": [
       { "hooks": [{ "type": "command", "command": "bash ~/.claude/budget.sh prompt", "timeout": 10 }] }
     ],
+    "PreToolUse": [
+      { "hooks": [{ "type": "command", "command": "bash ~/.claude/budget.sh pre", "timeout": 10 }] }
+    ],
     "PostToolUse": [
       { "hooks": [{ "type": "command", "command": "bash ~/.claude/budget.sh tool", "timeout": 10 }] }
+    ],
+    "Stop": [
+      { "hooks": [{ "type": "command", "command": "bash ~/.claude/budget.sh stop", "timeout": 10 }] }
     ]
   },
   "statusLine": { "type": "command", "command": "bash ~/.claude/statusline.sh", "refreshInterval": 60 }
@@ -82,12 +99,13 @@ fichier. L'état de chaque session vit dans `~/.claude/budget/<session_id>.json`
 bash test-budget.sh
 ```
 
-62 vérifications, dans un `$HOME` temporaire, sans toucher à ta configuration :
+86 vérifications, dans un `$HOME` temporaire, sans toucher à ta configuration :
 pose, plafond borné, fenêtre pleine, quota inutilisable (absent, vide,
 malformé, périmé), `off`, seuils une seule fois, saut de seuils, réinitialisation
 de fenêtre, gigue de `resets_at`, deux sessions, `session_id` absent ou
 dangereux, entrée illisible, purge par âge, réémission, segment de status line
-(vert, orange, rouge, absent). Variables de substitution utilisées par les
+(vert, orange, rouge, absent), verrou à 90 %, `finish`, nouveau plafond, `off`.
+Variables de substitution utilisées par les
 tests : `BUDGET_DIR`, `QUOTA_FILE`, `BUDGET_NOW`.
 
 ### Ce qui reste à tester dans une vraie session
@@ -184,11 +202,18 @@ ont été vus en session réelle le 2026-10-18 (voir la section suivante).
 - **Pourcentages sous N=5** : seuils à 2,5, 4 et 5 points, atteints à 3, 4 et 5
   sur entiers, donc séparables si la consommation avance d'un point à la fois.
 
-Reste ouvert : reprise avec `--resume`, rappel reçu par le sous-agent ou par le
-parent (hypothèse : le sous-agent seul), outils en échec, blocage par `Stop`,
-les cas du point 8 (deux sessions, `/clear`, `/compact`, `budget:` hors début,
-double pose, préfixe sans tâche), message de plafond avec le reste de la
-fenêtre globale, et formule de réinitialisation jamais vue en réel.
+Dépassement constaté : 7 sur 5. Causes : un lot de cinq `Edit` en parallèle
+(aucune alerte ne peut s'intercaler dans un lot), le décalage de `quota.json`,
+et un message qui disait « termine l'action en cours », donc autorisait à
+continuer. Réponse : le verrou `PreToolUse` à 90 %, écrit mais **jamais vu en
+réel** à la date de ce commit (les 24 tests ajoutés sont simulés).
+
+Reste ouvert : le verrou en session réelle (refus visible, raison reçue,
+`finish`, `N`, `off`, sous-agent refusé), reprise avec `--resume`, rappel reçu
+par le sous-agent ou par le parent (hypothèse : le sous-agent seul), outils en
+échec (`PostToolUseFailure`), les cas du point 8 (deux sessions, `/clear`,
+`/compact`, `budget:` hors début, double pose, préfixe sans tâche), et formule de
+réinitialisation jamais vue en réel.
 
 ### Pour qu'une autre session reprenne le travail
 
@@ -226,6 +251,6 @@ Bash and `jq` only.
   is injected.
 - The `budget:N` prefix stays in the prompt: hooks cannot rewrite it.
 
-Install: see the settings snippet above. Tests: `bash test-budget.sh` (62 checks
+Install: see the settings snippet above. Tests: `bash test-budget.sh` (86 checks
 in a throwaway `$HOME`). The French section lists what is still unverified in a
 live session (resume, subagents, update lag).
