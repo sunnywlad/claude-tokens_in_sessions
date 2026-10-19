@@ -7,9 +7,11 @@
 #   count.sh stop          Stop hook: ends a "count:finish" grant at the end of the turn
 #   count.sh status SID    for the status line: prints "consumed count pct", or nothing
 #   count.sh hermes llm|pre|end   Hermes shell hooks (pre_llm_call, pre_tool_call, on_session_end)
+#   count.sh ctx on|off|status   global switch of the context lock and warning (night runs)
 #   count.sh quota         Hermes plugin: merges a CLI rate_limit_event (JSON on stdin) into quota.json
 # Context lock (independent of count:): from COUNT_CTX_LIMIT tokens of context (default 150000)
 # "pre" denies every tool and "prompt" blocks every prompt, until the user types "unlock:".
+# The same tool hook warns the session CTX_WARN_MARGIN (15000) tokens before each lock level.
 # "unlock:free" removes the context limit for the whole session, lock active or not.
 # State: $COUNT_DIR/<session_id>.json, written only by that session (atomic tmp + mv).
 # Quota: quota.json, written by statusline.sh. Env overrides exist for the tests.
@@ -19,6 +21,8 @@ QUOTA="${QUOTA_FILE:-$HOME/.claude/quota.json}"
 NOW="${COUNT_NOW:-$(date +%s)}"
 CTX_LIMIT="${COUNT_CTX_LIMIT:-150000}"
 CTX_STEPS="${COUNT_CTX_STEPS:-180000 220000}"   # the lock comes back at each, one "unlock:" per step
+CTX_WARN_MARGIN="${COUNT_CTX_WARN_MARGIN:-15000}"   # the session is warned this many tokens before a lock
+CTX_OFF="$COUNT_DIR/ctx.off"   # present = no context lock and no warning, for every session
 STALE_MIN=1440   # state files untouched for 24 h belong to dead sessions
 
 # Prints "used resets_at" from quota.json; nothing if the file is absent, empty,
@@ -82,10 +86,26 @@ ctx_tokens() { # ctx_tokens TRANSCRIPT
 # CTX_LIMIT at first, then the step stored by the last "unlock:" (none left = never locked again).
 ctx_locked() { # ctx_locked SID TRANSCRIPT
   local at=$CTX_LIMIT f="$COUNT_DIR/$1.ctx.json"
+  [ -e "$CTX_OFF" ] && return 1
   [ -f "$f" ] && { at=$(jq -r '.next // empty' "$f" 2>/dev/null); [ -n "$at" ] || return 1; }
   CTX_TOKENS=$(ctx_tokens "$2"); [ -n "$CTX_TOKENS" ] || return 1
   CTX_AT=$at
   [ "$CTX_TOKENS" -ge "$at" ]
+}
+
+# Tells the running session, once per lock level, that the lock is CTX_WARN_MARGIN tokens away
+# (PostToolUse, no count needed). Prints the hook output and returns 0 only when it fires.
+ctx_warn() { # ctx_warn SID TRANSCRIPT EVENT
+  local at=$CTX_LIMIT f="$COUNT_DIR/$1.ctx.json" w="$COUNT_DIR/$1.warn.json" tokens tmp
+  [ -e "$CTX_OFF" ] && return 1
+  [ -f "$f" ] && { at=$(jq -r '.next // empty' "$f" 2>/dev/null); [ -n "$at" ] || return 1; }
+  tokens=$(ctx_tokens "$2"); [ -n "$tokens" ] || return 1
+  [ "$tokens" -lt "$at" ] && [ "$tokens" -ge $((at - CTX_WARN_MARGIN)) ] || return 1
+  [ "$(jq -r '.at // empty' "$w" 2>/dev/null)" = "$at" ] && return 1
+  mkdir -p "$COUNT_DIR"
+  tmp="$w.tmp.$$"
+  jq -n --argjson a "$at" '{at: $a}' > "$tmp" && mv "$tmp" "$w" || { rm -f "$tmp"; return 1; }
+  emit "$3" "Contexte de la session à $((tokens / 1000))k tokens, verrou à $((at / 1000))k : bientôt la limite. Prépare-toi à finir la tâche en cours, à enregistrer l'essentiel en mémoire, puis à être clear (l'utilisateur lancera /clear). Ne démarre rien de nouveau."
 }
 
 # First step strictly above the given token count; nothing when none is left.
@@ -145,6 +165,8 @@ prompt_mode() {
   if ! [[ $prompt =~ ^[[:space:]]*(\<pasted_content[^\>]*\>[[:space:]]*)?count:(off|finish|[1-9][0-9]*)([[:space:]]|$) ]]; then
     if [ -f "$COUNT_DIR/$sid.json" ] && locked "$COUNT_DIR/$sid.json"; then
       emit_block "Compte de tâche à 90 % ou plus : prompt refusé, aucun coût. Réponds par count:finish (terminer l'étape en cours), count:N (nouveau plafond de N %) ou count:off (tâche terminée)."
+    else
+      ctx_warn "$sid" "$tr" UserPromptSubmit
     fi
     exit 0
   fi
@@ -194,10 +216,12 @@ prompt_mode() {
 }
 
 tool_mode() { # tool_mode [EVENT]: PostToolUse by default, PostToolUseFailure for "fail"
-  local ev=${1:-PostToolUse} in sid f m c b pct cap level tmp
+  local ev=${1:-PostToolUse} in sid f m c b pct cap level tmp tr
   in=$(cat)
   sid=$(jq -r '.session_id // empty' <<<"$in" 2>/dev/null)
+  tr=$(jq -r '.transcript_path // empty' <<<"$in" 2>/dev/null)
   valid_sid "$sid" || exit 0
+  ctx_warn "$sid" "$tr" "$ev" && exit 0
   f="$COUNT_DIR/$sid.json"
   [ -f "$f" ] || exit 0
   m=$(measure "$f"); [ -n "$m" ] || exit 0
@@ -356,7 +380,18 @@ hermes_mode() { # hermes_mode llm|pre|end
   esac
 }
 
+# Global switch for the context lock and its warning: "ctx off" before a night run, "ctx on" after.
+ctx_switch() { # ctx_switch on|off|status
+  case "$1" in
+    off) mkdir -p "$COUNT_DIR" && : > "$CTX_OFF"; echo "Verrou de contexte désactivé pour toutes les sessions (count.sh ctx on pour le rétablir)." ;;
+    on)  rm -f "$CTX_OFF"; echo "Verrou de contexte activé pour toutes les sessions." ;;
+    status) [ -e "$CTX_OFF" ] && echo off || echo on ;;
+    *)   echo "usage : count.sh ctx on|off|status" >&2; return 1 ;;
+  esac
+}
+
 case "$1" in
+  ctx)    ctx_switch "$2" ;;
   hermes) hermes_mode "$2" ;;
   quota)  quota_mode ;;
   log)    log_mode ;;

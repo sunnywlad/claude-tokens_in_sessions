@@ -421,7 +421,7 @@ check "unlock: tools allowed" $([ -z "$(cpre c1)" ]; echo $?)
 check "unlock: prompts allowed" $([ -z "$(cprompt c1 hello)" ]; echo $?)
 check "unlock: message gives the next lock, cleanly" $(echo "$out" | ctx | grep -q "prochain verrou à 180k)"; echo $?)
 tr_line m4 false 179999 >> "$TR"
-check "unlock: open below the next step" $([ -z "$(cpre c1)" ] && [ -z "$(cprompt c1 hello)" ]; echo $?)
+check "unlock: open below the next step" $([ -z "$(cpre c1)" ] && [ -z "$(cprompt c1 hello | jq -r ".decision // empty")" ]; echo $?)
 tr_line m4b false 180000 >> "$TR"
 check "relock: tools denied at 180k" $([ -n "$(cpre c1)" ]; echo $?)
 check "relock: prompt blocked at 180k" $([ "$(cprompt c1 hello | jq -r .decision)" = block ]; echo $?)
@@ -610,6 +610,60 @@ for junk in '' 'not json' '{}' '{"session_id":"../x","extra":{"user_message":"co
   done
 done
 check "hermes: unsafe session_id writes nothing" $([ ! -e "$T/x.json" ] && [ -z "$(ls "$COUNT_DIR" 2>/dev/null)" ]; echo $?)
+
+# 30. Context warning: 15k tokens before each lock level, "tool" tells the running session to wrap up
+# (finish the task, save to memory, get ready for /clear). Once per level, no count needed.
+ctool() { jq -n --arg s "$1" --arg t "$TR" '{session_id: $s, transcript_path: $t, tool_name: "Bash", hook_event_name: "PostToolUse"}' | $B tool; }
+reset; quota 10; : > "$TR"; tr_line m1 false 134000 >> "$TR"
+check "warn: silent at 134k" $([ -z "$(ctool w1)" ]; echo $?)
+tr_line m2 false 135000 >> "$TR"
+out=$(ctool w1)
+check "warn: fires at 135k, PostToolUse" $([ "$(echo "$out" | jq -r .hookSpecificOutput.hookEventName)" = PostToolUse ]; echo $?)
+check "warn: names the size, the limit, memory and /clear" $(echo "$out" | ctx | grep -q "135k.*150k.*mémoire.*clear"; echo $?)
+check "warn: once only" $([ -z "$(ctool w1)" ]; echo $?)
+check "warn: another session still warned" $([ -n "$(ctool w2)" ]; echo $?)
+tr_line m3 false 150000 >> "$TR"
+check "warn: silent once locked (the lock speaks)" $([ -z "$(ctool w3)" ]; echo $?)
+reset; quota 10; : > "$TR"; tr_line m1 false 160000 >> "$TR"; cprompt w4 "unlock:" > /dev/null
+tr_line m2 false 164000 >> "$TR"
+check "warn: after unlock, silent before 165k" $([ -z "$(ctool w4)" ]; echo $?)
+tr_line m3 false 165000 >> "$TR"
+check "warn: after unlock, fires 15k before the next lock (180k)" $(ctool w4 | ctx | grep -q "165k.*180k"; echo $?)
+reset; quota 10; : > "$TR"; tr_line m1 false 160000 >> "$TR"; cprompt w5 "unlock:free" > /dev/null
+check "warn: silent under unlock:free" $([ -z "$(ctool w5)" ]; echo $?)
+reset; quota 10; : > "$TR"; tr_line m1 false 140000 >> "$TR"
+check "warn: no transcript, silent" $([ -z "$(jq -n '{session_id: "w6", tool_name: "Bash"}' | $B tool)" ]; echo $?)
+
+# Same warning at prompt submission (a turn without tools would never get it), UserPromptSubmit.
+reset; quota 10; : > "$TR"; tr_line m1 false 136000 >> "$TR"
+out=$(cprompt p1 "hello")
+check "warn prompt: fires at 136k, UserPromptSubmit" $([ "$(echo "$out" | jq -r .hookSpecificOutput.hookEventName)" = UserPromptSubmit ] && echo "$out" | ctx | grep -q "136k.*150k"; echo $?)
+check "warn prompt: once, then the tool hook is silent too" $([ -z "$(cprompt p1 again)" ] && [ -z "$(ctool p1)" ]; echo $?)
+reset; quota 10; : > "$TR"; tr_line m1 false 136000 >> "$TR"; ctool p2 > /dev/null
+check "warn prompt: silent after the tool hook warned" $([ -z "$(cprompt p2 hello)" ]; echo $?)
+reset; quota 10; : > "$TR"; tr_line m1 false 136000 >> "$TR"
+out=$(cprompt p3 "count:20 go")
+check "warn prompt: a count: prompt still sets its count" $([ "$(state p3 .cap)" = 30 ] && echo "$out" | ctx | grep -q "Compte de tâche"; echo $?)
+reset; quota 10; : > "$TR"; tr_line m1 false 136000 >> "$TR"; prompt p4 "count:20 go" > /dev/null; quota 28
+check "warn prompt: count lock block wins" $([ "$(cprompt p4 hello | jq -r .decision)" = block ]; echo $?)
+
+# 31. Global switch: "count.sh ctx off" removes the context lock and warning for every session
+# (night runs), "ctx on" restores them. A file, so sessions already running obey at once.
+reset; quota 10; : > "$TR"; tr_line m1 false 160000 >> "$TR"
+check "switch: locked before" $([ -n "$(cpre g1)" ]; echo $?)
+out=$($B ctx off)
+check "switch: off says so" $(echo "$out" | grep -qi "désactivé"; echo $?)
+check "switch: off, tool allowed" $([ -z "$(cpre g1)" ]; echo $?)
+check "switch: off, prompt passes" $([ -z "$(cprompt g1 hello)" ]; echo $?)
+check "switch: off, no warning" $([ -z "$(ctool g1)" ]; echo $?)
+check "switch: status reads off" $([ "$($B ctx status)" = off ]; echo $?)
+check "switch: off survives the 24 h purge" $(touch -d '2 days ago' "$COUNT_DIR/ctx.off"; cprompt g2 hi > /dev/null; [ -e "$COUNT_DIR/ctx.off" ]; echo $?)
+out=$($B ctx on)
+check "switch: on says so" $(echo "$out" | grep -qi "activé"; echo $?)
+check "switch: on, locked again" $([ -n "$(cpre g1)" ] && [ "$(cprompt g1 hello | jq -r .decision)" = block ]; echo $?)
+check "switch: status reads on" $([ "$($B ctx status)" = on ]; echo $?)
+check "switch: on twice is harmless" $($B ctx on > /dev/null; echo $?)
+check "switch: off keeps the count: lock" $(reset; quota 10; prompt g3 "count:20 go" > /dev/null; $B ctx off > /dev/null; quota 28; [ -n "$(cpre g3)" ]; echo $?)
 
 echo "passed: $pass, failed: $fail"
 [ "$fail" -eq 0 ]

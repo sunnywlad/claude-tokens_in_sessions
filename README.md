@@ -303,6 +303,18 @@ Non vu en réel : `count:finish` (levée puis retombée à la fin du tour),
   s'est franchi par le travail normal. Le verrou `PreToolUse` à 1/1 a refusé
   l'outil suivant, donc l'essai d'un échec au plafond exige `count:finish`.
 
+### Avertissement à 135k et interrupteur global (2026-10-19, 270 verts, pas encore vu en réel)
+
+- **Avertissement** : `PostToolUse` (`tool` et `fail`), sans `count:` requis, injecte
+  `additionalContext` 15k tokens avant chaque palier de verrou (135k, puis 165k et 205k
+  après un `unlock:`) : finir la tâche, enregistrer en mémoire, se préparer au `/clear`.
+  Une fois par palier (`<sid>.warn.json`). Muet au verrou, sous `unlock:free`, sans
+  transcript. Marge réglable : `COUNT_CTX_WARN_MARGIN`. Aussi à la soumission d'un prompt (hors verrou `count:`).
+- **Interrupteur** : `bash ~/.claude/count.sh ctx off|on|status`. Le fichier
+  `$COUNT_DIR/ctx.off` coupe verrou et avertissement de contexte pour toutes les sessions,
+  y compris celles déjà ouvertes, et survit à la purge de 24 h. Le verrou `count:` reste
+  par session (`count:off`).
+
 ### Essais réels du point 6 (2026-10-19)
 
 - **`/compact` et `/clear`** : ne passent pas par le hook de prompt (verrou du compte actif,
