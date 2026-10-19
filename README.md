@@ -102,7 +102,7 @@ fichier. L'état de chaque session vit dans `~/.claude/count/<session_id>.json`
 bash test-count.sh
 ```
 
-220 vérifications, dans un `$HOME` temporaire, sans toucher à ta configuration :
+248 vérifications, dans un `$HOME` temporaire, sans toucher à ta configuration :
 pose, plafond borné, fenêtre pleine, quota inutilisable (absent, vide,
 malformé, périmé), `off`, seuils une seule fois, saut de seuils, réinitialisation
 de fenêtre, gigue de `resets_at`, deux sessions, `session_id` absent ou
@@ -462,10 +462,22 @@ Non vu en réel : `count:finish` (levée puis retombée à la fin du tour),
      `hermes plugins update` refuse les installations épinglées, donc le correctif
      devrait survivre. Non vérifié. Une réinstallation ou un dépôt amont plus récent
      l'efface ; les `.orig` et ce paragraphe servent à le refaire.
-   - Reste, dans l'ordre : le préfixe `count:N` côté Hermes (`pre_gateway_dispatch`),
-     la phrase de budget (`pre_llm_call`), les rappels, le verrou (`pre_tool_call`),
-     `finish` et `off`, le segment d'affichage. Même forme que dans le terminal, à
-     ajuster à l'usage (décision de Wladimir).
+   - **Étape 2 faite côté code, pas encore branchée** (248 tests verts, rouges d'abord) :
+     `count.sh hermes llm|pre|end` adapte les hooks shell de Hermes (même protocole JSON
+     que Claude Code, `hooks:` dans le `config.yaml` du profil, consentement au premier
+     usage). `llm` (`pre_llm_call`) : pose `count:N`, `finish`, `off`, phrase de budget et
+     rappels, réponse `{"context": ...}`. `pre` (`pre_tool_call`) : verrou à 90 %,
+     réponse `{"decision":"block","reason":...}`. `end` (`on_session_end`) : fin de
+     l'autorisation `finish`. Écarts avec le terminal : Hermes ne peut pas refuser un
+     prompt (au verrou, le modèle reçoit l'ordre de relayer le message sans outil) et n'a
+     pas d'injection en cours de tour (rappels au début du tour suivant). Pas de segment
+     `task` ni de verrou de contexte (pas de transcript). `count.sh` actif copié dans
+     `~/.claude/`.
+   - Reste : brancher les trois hooks dans `~/.hermes/profiles/claudesub/config.yaml`
+     (profil d'essai, jamais `default`), accepter le consentement, essai réel avec
+     `count:1` à `count:3` (`hermes -p claudesub chat -q`), puis `redacteur`. Vérifier
+     que la passerelle relance bien le plugin patché. Un affichage de l'état côté
+     Hermes reste à décider. Ajuster à l'usage (décision de Wladimir).
 
 Règles de la passe : un point à la fois, `count:3` ou `count:5` pour les essais,
 aucun lancement manuel de `statusline.sh` avec de fausses valeurs, pas de
@@ -510,6 +522,6 @@ Bash and `jq` only.
   is injected.
 - The `count:N` prefix stays in the prompt: hooks cannot rewrite it.
 
-Install: see the settings snippet above. Tests: `bash test-count.sh` (220 checks
+Install: see the settings snippet above. Tests: `bash test-count.sh` (248 checks
 in a throwaway `$HOME`). The French section lists what is still unverified in a
 live session (resume, subagents, update lag).

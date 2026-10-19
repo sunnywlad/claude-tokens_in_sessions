@@ -569,5 +569,47 @@ out=$(tool hq)
 check "quota event: feeds the count (11/20 raises the 50 % reminder)" $(echo "$out" | ctx | grep -q "50 %"; echo $?)
 check "quota event: no leftover tmp file" $([ -z "$(ls "$T/.claude" | grep tmp)" ]; echo $?)
 
+# Hermes shell hooks: "count.sh hermes llm|pre|end" adapts the Hermes payloads and answers to the modes above
+hllm() { jq -n --arg s "$1" --arg m "$2" '{hook_event_name: "pre_llm_call", session_id: $s, tool_name: null, extra: {user_message: $m}}' | $B hermes llm; }
+hpre() { jq -n --arg s "$1" '{hook_event_name: "pre_tool_call", session_id: $s, tool_name: "terminal", tool_input: {command: "ls"}, extra: {}}' | $B hermes pre; }
+hend() { jq -n --arg s "$1" '{hook_event_name: "on_session_end", session_id: $s, extra: {}}' | $B hermes end; }
+reset; quota 11
+out=$(hllm h1 "count:25 do the task")
+check "hermes llm: set writes the state" $([ "$(state h1 .start)" = 11 ] && [ "$(state h1 .cap)" = 36 ]; echo $?)
+check "hermes llm: set answers {context} with the budget sentence" $(echo "$out" | jq -e '.context | test("25 %.*plafond atteint à 36 %")' >/dev/null; echo $?)
+check "hermes llm: set answer has no Claude Code envelope" $(echo "$out" | jq -e 'has("hookSpecificOutput") | not' >/dev/null; echo $?)
+out=$(hllm h1 "just a normal prompt")
+check "hermes llm: below any threshold, silent" $([ -z "$out" ]; echo $?)
+quota 24; out=$(hllm h1 "continue")
+check "hermes llm: threshold crossed, reminder as {context}" $(echo "$out" | jq -e '.context | test("50 %")' >/dev/null; echo $?)
+out=$(hllm h1 "continue")
+check "hermes llm: reminder fires once" $([ -z "$out" ]; echo $?)
+out=$(hpre h1)
+check "hermes pre: below 90 %, silent" $([ -z "$out" ]; echo $?)
+quota 34
+out=$(hpre h1)
+check "hermes pre: at 90 %, blocks with {decision, reason}" $([ "$(echo "$out" | jq -r .decision)" = block ] && echo "$out" | jq -e '.reason | test("count:finish")' >/dev/null; echo $?)
+out=$(hllm h1 "salut")
+check "hermes llm: locked prompt cannot be refused, the model is told to relay the lock" $(echo "$out" | jq -e '(.context | test("count:finish")) and (has("decision") | not)' >/dev/null; echo $?)
+out=$(hllm h1 "count:finish")
+check "hermes llm: finish grants" $([ "$(state h1 .grant)" = true ]; echo $?)
+out=$(hpre h1)
+check "hermes pre: granted, silent" $([ -z "$out" ]; echo $?)
+hend h1
+check "hermes end: grant dropped" $([ "$(state h1 '.grant // false')" = false ]; echo $?)
+out=$(hpre h1)
+check "hermes pre: after the grant fell, blocks again" $([ "$(echo "$out" | jq -r .decision)" = block ]; echo $?)
+hllm h1 "count:off" > /dev/null
+check "hermes llm: off removes the state" $([ ! -e "$COUNT_DIR/h1.json" ]; echo $?)
+out=$(hpre h1)
+check "hermes pre: no state, silent" $([ -z "$out" ]; echo $?)
+for junk in '' 'not json' '{}' '{"session_id":"../x","extra":{"user_message":"count:5 x"}}'; do
+  for m in llm pre end; do
+    out=$(echo "$junk" | $B hermes $m 2>&1); rc=$?
+    check "hermes $m: junk '$junk' is silent" $([ -z "$out" ] && [ $rc -eq 0 ]; echo $?)
+  done
+done
+check "hermes: unsafe session_id writes nothing" $([ ! -e "$T/x.json" ] && [ -z "$(ls "$COUNT_DIR" 2>/dev/null)" ]; echo $?)
+
 echo "passed: $pass, failed: $fail"
 [ "$fail" -eq 0 ]

@@ -6,6 +6,7 @@
 #   count.sh fail          PostToolUseFailure hook: same thresholds as "tool", for tools that failed
 #   count.sh stop          Stop hook: ends a "count:finish" grant at the end of the turn
 #   count.sh status SID    for the status line: prints "consumed count pct", or nothing
+#   count.sh hermes llm|pre|end   Hermes shell hooks (pre_llm_call, pre_tool_call, on_session_end)
 #   count.sh quota         Hermes plugin: merges a CLI rate_limit_event (JSON on stdin) into quota.json
 # Context lock (independent of count:): from COUNT_CTX_LIMIT tokens of context (default 150000)
 # "pre" denies every tool and "prompt" blocks every prompt, until the user types "unlock:".
@@ -328,7 +329,35 @@ quota_mode() {
   echo "$out" > "$tmp" && mv "$tmp" "$QUOTA" || rm -f "$tmp"
 }
 
+# Hermes shell hooks speak another wire format: {session_id, tool_name, extra: {user_message}} in,
+# {context} / {decision: block, reason} out. This adapts them to the modes above. Hermes cannot refuse
+# a prompt (pre_llm_call only injects) and has no mid-turn injection, so at a lock the model is told
+# to relay the lock, and the threshold reminders arrive at the start of the next turn.
+hermes_mode() { # hermes_mode llm|pre|end
+  local in sid out
+  in=$(cat)
+  sid=$(jq -r '.session_id // empty' <<<"$in" 2>/dev/null)
+  valid_sid "$sid" || exit 0
+  case "$1" in
+    llm)
+      out=$(jq -c '{session_id, prompt: (.extra.user_message // "")}' <<<"$in" | prompt_mode)
+      if [ -z "$out" ]; then
+        out=$(jq -nc --arg s "$sid" '{session_id: $s}' | tool_mode)
+      fi
+      [ -n "$out" ] || exit 0
+      jq -c 'if .decision == "block" then {context: ("Verrou du compte : ne lance aucun outil, transmets ce message à l\u0027utilisateur : " + .reason)}
+             elif .hookSpecificOutput.additionalContext then {context: .hookSpecificOutput.additionalContext} else empty end' <<<"$out" ;;
+    pre)
+      out=$(jq -c '{session_id, tool_name}' <<<"$in" | pre_mode)
+      [ -n "$out" ] || exit 0
+      jq -c '{decision: "block", reason: .hookSpecificOutput.permissionDecisionReason}' <<<"$out" ;;
+    end)
+      jq -c '{session_id}' <<<"$in" | stop_mode ;;
+  esac
+}
+
 case "$1" in
+  hermes) hermes_mode "$2" ;;
   quota)  quota_mode ;;
   log)    log_mode ;;
   tokens) tokens_mode "$2" ;;
