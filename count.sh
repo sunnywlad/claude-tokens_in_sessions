@@ -116,7 +116,7 @@ prompt_mode() {
       nxt=$(ctx_next "$CTX_TOKENS")
       jq -n --argjson t "$NOW" --argjson k "$CTX_TOKENS" --arg n "$nxt" \
         '{unlocked_at: $t, tokens: $k, next: (if $n == "" then null else ($n | tonumber) end)}' > "$tmp" && mv "$tmp" "$COUNT_DIR/$sid.ctx.json" || rm -f "$tmp"
-      emit UserPromptSubmit "Verrou de contexte déverrouillé par l'utilisateur (contexte à $((CTX_TOKENS / 1000))k tokens, prochain verrou ${nxt:+à $((nxt / 1000))k}${nxt:-aucun}). Continue la tâche ; garde en tête que chaque appel coûte cher à cette taille."
+      emit UserPromptSubmit "Verrou de contexte déverrouillé par l'utilisateur (contexte à $((CTX_TOKENS / 1000))k tokens, prochain verrou $([ -n "$nxt" ] && echo "à $((nxt / 1000))k" || echo aucun)). Continue la tâche ; garde en tête que chaque appel coûte cher à cette taille."
     else
       emit UserPromptSubmit "Aucun verrou de contexte actif dans cette session : unlock: ignoré."
     fi

@@ -419,7 +419,7 @@ out=$(cprompt c1 "unlock: continue")
 check "unlock: passes, says so" $([ -z "$(echo "$out" | jq -r '.decision // empty')" ] && echo "$out" | ctx | grep -q "déverrouillé"; echo $?)
 check "unlock: tools allowed" $([ -z "$(cpre c1)" ]; echo $?)
 check "unlock: prompts allowed" $([ -z "$(cprompt c1 hello)" ]; echo $?)
-check "unlock: message gives the next lock" $(echo "$out" | ctx | grep -q "180k"; echo $?)
+check "unlock: message gives the next lock, cleanly" $(echo "$out" | ctx | grep -q "prochain verrou à 180k)"; echo $?)
 tr_line m4 false 179999 >> "$TR"
 check "unlock: open below the next step" $([ -z "$(cpre c1)" ] && [ -z "$(cprompt c1 hello)" ]; echo $?)
 tr_line m4b false 180000 >> "$TR"
@@ -431,7 +431,7 @@ check "relock: open again" $([ -z "$(cpre c1)" ]; echo $?)
 tr_line m4c false 220000 >> "$TR"
 check "relock: denied at 220k" $([ -n "$(cpre c1)" ]; echo $?)
 out=$(cprompt c1 "unlock:")
-check "last unlock: no further lock announced" $(echo "$out" | ctx | grep -q "aucun"; echo $?)
+check "last unlock: no further lock announced" $(echo "$out" | ctx | grep -q "prochain verrou aucun)"; echo $?)
 tr_line m4d false 900000 >> "$TR"
 check "last unlock: open for good" $([ -z "$(cpre c1)" ] && [ -z "$(cprompt c1 hello)" ]; echo $?)
 reset; quota 10; : > "$TR"; tr_line m1 false 230000 >> "$TR"; cprompt c5 "unlock:" > /dev/null

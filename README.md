@@ -277,7 +277,7 @@ session fait avancer `task` (voir le point 4 de la prochaine session).
 Non vu en réel : `count:finish` (levée puis retombée à la fin du tour),
 `count:N` après verrou, sous-agent refusé et message à l'orchestrateur.
 
-### Verrou de contexte et outils en échec (2026-10-19, tests verts, pas encore vu en réel)
+### Verrou de contexte et outils en échec (2026-10-19, vus en réel sauf `/clear` et `/compact`)
 
 - **Verrou de contexte**, indépendant de `count:` : dès 150 000 tokens de contexte
   (entrée + cache écrit + cache lu du dernier message principal du transcript,
@@ -285,12 +285,18 @@ Non vu en réel : `count:finish` (levée puis retombée à la fin du tour),
   tout prompt. `unlock:` en début de prompt (collé accepté) lève le verrou
   (`<sid>.ctx.json`) ; il reprend à 180k puis à 220k, un `unlock:` par palier, et
   plus après le dernier. Sans verrou actif, `unlock:` est ignoré.
-  Seuils réglables par `COUNT_CTX_LIMIT` et `COUNT_CTX_STEPS`. Non vu en réel : `/clear` et `/compact`
+  Seuils réglables par `COUNT_CTX_LIMIT` et `COUNT_CTX_STEPS`. Vu en réel :
+  `unlock:` à 159k, message « prochain verrou à 180k » (le premier jet affichait
+  « 180k180000 », corrigé, test rouge d'abord). Non vu : `/clear` et `/compact`
   passent-ils par le hook de prompt (sinon ils échappent au blocage, ce qui est
   voulu).
 - **Outils en échec** : hook `PostToolUseFailure` (`count.sh fail`), mêmes seuils
-  que `tool`, `fired` partagé. À éprouver : un `Read` sur un fichier absent sous
-  `count:3`.
+  que `tool`, `fired` partagé. Vu en réel (`count:1`, départ 28 %) : après
+  `count:finish`, un `Read` sur un fichier absent a déclenché le rappel « plafond
+  atteint » par `PostToolUseFailure`. Avant, quatre lectures lourdes et quatre
+  échecs n'ont pas fait bouger `used_percentage` (cache lu, peu cher) : le point
+  s'est franchi par le travail normal. Le verrou `PreToolUse` à 1/1 a refusé
+  l'outil suivant, donc l'essai d'un échec au plafond exige `count:finish`.
 
 ### Prochaine session, dans cet ordre
 
@@ -359,8 +365,8 @@ Non vu en réel : `count:finish` (levée puis retombée à la fin du tour),
    **Prochaine étape** : essais d'étalonnage (fenêtre seule, hors réinitialisation,
    compositions de tokens contrastées, au moins 5 points chacun), puis validation sur
    un essai tenu à part ; ensuite seulement, le comptage en points dans `count.sh`.
-5. **Outils en échec** : `PostToolUseFailure` (un `Read` sur un fichier absent n'a
-   que `PreToolUse`). Un petit budget suffit pour l'essai.
+5. **Outils en échec : fait et vu en réel** (2026-10-19, voir la section
+   précédente).
 6. Rappel et refus côté sous-agent, `--resume`, les cas du point 8 (deux sessions,
    `/clear`, `/compact`, préfixe hors début, double pose, préfixe sans tâche),
    formule de réinitialisation jamais vue en réel, blocage par `Stop`.
