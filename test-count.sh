@@ -356,5 +356,108 @@ reset; quota 10; prompt s1 "count:20 go" > /dev/null; quota 28
 out=$(prompt s1 $'<pasted_content id="e090">\ncount:finish')
 check "pasted: count:finish passes the lock" $([ "$(state s1 .grant)" = true ]; echo $?)
 
+# 25. PostToolUseFailure: a failed tool (no PostToolUse) still advances the thresholds
+fail() { jq -n --arg s "$1" '{session_id: $s, tool_name: "Read", hook_event_name: "PostToolUseFailure"}' | $B fail; }
+reset; quota 10; prompt s1 "count:20 go" > /dev/null; quota 20
+out=$(fail s1)
+check "failure: 50 % fires" $(echo "$out" | ctx | grep -q "50 % consommé (10/20"; echo $?)
+check "failure: event name" $([ "$(echo "$out" | jq -r .hookSpecificOutput.hookEventName)" = PostToolUseFailure ]; echo $?)
+out=$(fail s1)
+check "failure: once per threshold" $([ -z "$out" ]; echo $?)
+out=$(tool s1)
+check "failure: shares fired with PostToolUse" $([ -z "$out" ]; echo $?)
+reset; quota 10
+out=$(fail s9)
+check "failure: no count, silent" $([ -z "$out" ]; echo $?)
+
+# 26. Edge cases of the prompt hook (point 6), with a lock and without
+reset; quota 10; prompt s1 "count:20 go" > /dev/null; quota 28
+out=$(prompt s1 "/clear")
+check "/clear at the lock: blocked like any prompt (built-ins may bypass the hook, unverified)" $([ "$(echo "$out" | jq -r .decision)" = block ]; echo $?)
+out=$(prompt s1 "/compact")
+check "/compact at the lock: blocked like any prompt" $([ "$(echo "$out" | jq -r .decision)" = block ]; echo $?)
+reset; quota 10
+out=$(prompt s1 "/clear")
+check "/clear without count: silent" $([ -z "$out" ] && [ ! -e "$COUNT_DIR/s1.json" ]; echo $?)
+prompt s1 "count:20 go" > /dev/null; quota 20; tool s1 > /dev/null
+prompt s1 "count:10 again" > /dev/null
+check "double set: second replaces the first, fired cleared" $([ "$(state s1 .start)" = 20 ] && [ "$(state s1 .cap)" = 30 ] && [ "$(state s1 '.fired | length')" = 0 ]; echo $?)
+reset; quota 10
+out=$(prompt s1 "count:0 go")
+check "count:0: ignored" $([ -z "$out" ] && [ ! -e "$COUNT_DIR/s1.json" ]; echo $?)
+out=$(prompt s1 "count:finish")
+check "finish without count: no state left behind" $([ ! -e "$COUNT_DIR/s1.json" ]; echo $?)
+prompt s1 "count:20 go" > /dev/null; prompt s1 "count:finish" > /dev/null; prompt s1 "count:15 go" > /dev/null
+check "set after finish: grant gone with the fresh state" $([ "$(state s1 '.grant // false')" = false ]; echo $?)
+
+# 27. Context lock: from 150k tokens of context (input + cache write + cache read of the last
+# main-thread assistant message), independent of count:. Tools denied, prompts blocked, until "unlock:".
+TR="$T/transcript.jsonl"
+tr_line() { # tr_line ID SIDECHAIN CONTEXT-TOKENS
+  jq -nc --arg id "$1" --argjson sc "$2" --argjson c "$3" \
+    '{type: "assistant", isSidechain: $sc, message: {id: $id, model: "sonnet", usage: {input_tokens: 1, cache_creation_input_tokens: 0, cache_read_input_tokens: ($c - 1), output_tokens: 5}}}'
+}
+cpre() { jq -n --arg s "$1" --arg t "$TR" '{session_id: $s, transcript_path: $t, tool_name: "Bash", hook_event_name: "PreToolUse"}' | $B pre; }
+cprompt() { jq -n --arg s "$1" --arg p "$2" --arg t "$TR" '{session_id: $s, prompt: $p, transcript_path: $t}' | $B prompt; }
+reset; quota 10; : > "$TR"
+tr_line m1 false 149999 >> "$TR"
+check "ctx: silent below 150k" $([ -z "$(cpre c1)" ]; echo $?)
+tr_line m2 false 150000 >> "$TR"
+out=$(cpre c1)
+check "ctx: deny at 150k, no count needed" $([ "$(echo "$out" | jq -r .hookSpecificOutput.permissionDecision)" = deny ]; echo $?)
+reason=$(echo "$out" | jq -r .hookSpecificOutput.permissionDecisionReason)
+check "ctx: reason names unlock:" $(echo "$reason" | grep -q "unlock:"; echo $?)
+check "ctx: reason gives the size" $(echo "$reason" | grep -q "150"; echo $?)
+tr_line m3 true 400000 >> "$TR"
+check "ctx: sidechain lines ignored (last main line still 150k)" $([ -n "$(cpre c1)" ]; echo $?)
+out=$(cprompt c1 "hello")
+check "ctx: ordinary prompt blocked" $([ "$(echo "$out" | jq -r .decision)" = block ]; echo $?)
+check "ctx: block reason names unlock:" $(echo "$out" | jq -r .reason | grep -q "unlock:"; echo $?)
+out=$(cprompt c1 "count:5 go")
+check "ctx: count: prompts blocked too" $([ "$(echo "$out" | jq -r .decision)" = block ] && [ ! -e "$COUNT_DIR/c1.json" ]; echo $?)
+out=$(cprompt c1 "unlock: continue")
+check "unlock: passes, says so" $([ -z "$(echo "$out" | jq -r '.decision // empty')" ] && echo "$out" | ctx | grep -q "déverrouillé"; echo $?)
+check "unlock: tools allowed" $([ -z "$(cpre c1)" ]; echo $?)
+check "unlock: prompts allowed" $([ -z "$(cprompt c1 hello)" ]; echo $?)
+check "unlock: message gives the next lock" $(echo "$out" | ctx | grep -q "180k"; echo $?)
+tr_line m4 false 179999 >> "$TR"
+check "unlock: open below the next step" $([ -z "$(cpre c1)" ] && [ -z "$(cprompt c1 hello)" ]; echo $?)
+tr_line m4b false 180000 >> "$TR"
+check "relock: tools denied at 180k" $([ -n "$(cpre c1)" ]; echo $?)
+check "relock: prompt blocked at 180k" $([ "$(cprompt c1 hello | jq -r .decision)" = block ]; echo $?)
+out=$(cprompt c1 "unlock:")
+check "relock: second unlock names 220k" $(echo "$out" | ctx | grep -q "220k"; echo $?)
+check "relock: open again" $([ -z "$(cpre c1)" ]; echo $?)
+tr_line m4c false 220000 >> "$TR"
+check "relock: denied at 220k" $([ -n "$(cpre c1)" ]; echo $?)
+out=$(cprompt c1 "unlock:")
+check "last unlock: no further lock announced" $(echo "$out" | ctx | grep -q "aucun"; echo $?)
+tr_line m4d false 900000 >> "$TR"
+check "last unlock: open for good" $([ -z "$(cpre c1)" ] && [ -z "$(cprompt c1 hello)" ]; echo $?)
+reset; quota 10; : > "$TR"; tr_line m1 false 230000 >> "$TR"; cprompt c5 "unlock:" > /dev/null
+tr_line m2 false 900000 >> "$TR"
+check "unlock past every step: never locked again" $([ -z "$(cpre c5)" ]; echo $?)
+reset; quota 10; : > "$TR"; tr_line m1 false 150000 >> "$TR"; cprompt c1 "unlock:" > /dev/null
+check "unlock: other session still locked" $([ -n "$(cpre c2)" ]; echo $?)
+out=$(cprompt c2 $'<pasted_content id="e1">\nunlock:')
+check "unlock: accepted after the paste wrapper" $(echo "$out" | ctx | grep -q "déverrouillé"; echo $?)
+reset; quota 10; : > "$TR"; tr_line m1 false 1000 >> "$TR"
+out=$(cprompt c3 "unlock:")
+check "unlock without lock: says nothing to unlock, stores nothing" $(echo "$out" | ctx | grep -qi "aucun verrou"; echo $?)
+tr_line m2 false 200000 >> "$TR"
+check "unlock without lock: lock still fires later" $([ -n "$(cpre c3)" ]; echo $?)
+rm -f "$TR"
+check "ctx: no transcript, silent" $([ -z "$(cpre c3)" ] && [ -z "$(cprompt c3 hi)" ]; echo $?)
+: > "$TR"
+check "ctx: empty transcript, silent" $([ -z "$(cpre c3)" ]; echo $?)
+echo 'oops' > "$TR"
+check "ctx: garbage transcript, silent" $([ -z "$(cpre c3)" ]; echo $?)
+tr_line m5 false 160000 >> "$TR"
+export COUNT_CTX_LIMIT=200000
+check "ctx: limit overridable" $([ -z "$(cpre c3)" ]; echo $?)
+unset COUNT_CTX_LIMIT
+reset; quota 10; : > "$TR"; tr_line m1 false 160000 >> "$TR"; prompt c4 "count:20 go" > /dev/null
+check "ctx: unlocking leaves a count untouched" $(cprompt c4 "unlock:" > /dev/null; [ "$(state c4 .cap)" = 30 ]; echo $?)
+
 echo "passed: $pass, failed: $fail"
 [ "$fail" -eq 0 ]

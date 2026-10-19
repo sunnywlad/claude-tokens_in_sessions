@@ -102,7 +102,7 @@ fichier. L'état de chaque session vit dans `~/.claude/count/<session_id>.json`
 bash test-count.sh
 ```
 
-132 vérifications, dans un `$HOME` temporaire, sans toucher à ta configuration :
+174 vérifications, dans un `$HOME` temporaire, sans toucher à ta configuration :
 pose, plafond borné, fenêtre pleine, quota inutilisable (absent, vide,
 malformé, périmé), `off`, seuils une seule fois, saut de seuils, réinitialisation
 de fenêtre, gigue de `resets_at`, deux sessions, `session_id` absent ou
@@ -277,6 +277,21 @@ session fait avancer `task` (voir le point 4 de la prochaine session).
 Non vu en réel : `count:finish` (levée puis retombée à la fin du tour),
 `count:N` après verrou, sous-agent refusé et message à l'orchestrateur.
 
+### Verrou de contexte et outils en échec (2026-10-19, tests verts, pas encore vu en réel)
+
+- **Verrou de contexte**, indépendant de `count:` : dès 150 000 tokens de contexte
+  (entrée + cache écrit + cache lu du dernier message principal du transcript,
+  sous-agents exclus), `PreToolUse` refuse tout outil et `UserPromptSubmit` bloque
+  tout prompt. `unlock:` en début de prompt (collé accepté) lève le verrou
+  (`<sid>.ctx.json`) ; il reprend à 180k puis à 220k, un `unlock:` par palier, et
+  plus après le dernier. Sans verrou actif, `unlock:` est ignoré.
+  Seuils réglables par `COUNT_CTX_LIMIT` et `COUNT_CTX_STEPS`. Non vu en réel : `/clear` et `/compact`
+  passent-ils par le hook de prompt (sinon ils échappent au blocage, ce qui est
+  voulu).
+- **Outils en échec** : hook `PostToolUseFailure` (`count.sh fail`), mêmes seuils
+  que `tool`, `fired` partagé. À éprouver : un `Read` sur un fichier absent sous
+  `count:3`.
+
 ### Prochaine session, dans cet ordre
 
 1. **Refuser le prompt au verrou : fait et vu en réel** (2026-10-18). Seuls les
@@ -401,6 +416,6 @@ Bash and `jq` only.
   is injected.
 - The `count:N` prefix stays in the prompt: hooks cannot rewrite it.
 
-Install: see the settings snippet above. Tests: `bash test-count.sh` (132 checks
+Install: see the settings snippet above. Tests: `bash test-count.sh` (174 checks
 in a throwaway `$HOME`). The French section lists what is still unverified in a
 live session (resume, subagents, update lag).

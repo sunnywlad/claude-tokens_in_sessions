@@ -3,14 +3,19 @@
 #   count.sh prompt        UserPromptSubmit hook (JSON on stdin)
 #   count.sh tool          PostToolUse hook (JSON on stdin)
 #   count.sh pre           PreToolUse hook: denies every tool from 90 % of the count, unless granted
+#   count.sh fail          PostToolUseFailure hook: same thresholds as "tool", for tools that failed
 #   count.sh stop          Stop hook: ends a "count:finish" grant at the end of the turn
 #   count.sh status SID    for the status line: prints "consumed count pct", or nothing
+# Context lock (independent of count:): from COUNT_CTX_LIMIT tokens of context (default 150000)
+# "pre" denies every tool and "prompt" blocks every prompt, until the user types "unlock:".
 # State: $COUNT_DIR/<session_id>.json, written only by that session (atomic tmp + mv).
 # Quota: quota.json, written by statusline.sh. Env overrides exist for the tests.
 
 COUNT_DIR="${COUNT_DIR:-$HOME/.claude/count}"
 QUOTA="${QUOTA_FILE:-$HOME/.claude/quota.json}"
 NOW="${COUNT_NOW:-$(date +%s)}"
+CTX_LIMIT="${COUNT_CTX_LIMIT:-150000}"
+CTX_STEPS="${COUNT_CTX_STEPS:-180000 220000}"   # the lock comes back at each, one "unlock:" per step
 STALE_MIN=1440   # state files untouched for 24 h belong to dead sessions
 
 # Prints "used resets_at" from quota.json; nothing if the file is absent, empty,
@@ -61,17 +66,66 @@ locked() { # locked STATE_FILE
   [ "$(jq -n --argjson p "$3" '$p >= 90')" = true ]
 }
 
+# Context size of a session: input + cache write + cache read of the last main-thread assistant
+# message of the transcript (sidechains are sub-agents). Prints nothing when unreadable.
+ctx_tokens() { # ctx_tokens TRANSCRIPT
+  [ -f "$1" ] || return 1
+  jq -rnR '[inputs | fromjson? | select(.type == "assistant" and (.isSidechain | not) and .message.usage != null)]
+    | last | .message.usage
+    | (.input_tokens // 0) + (.cache_creation_input_tokens // 0) + (.cache_read_input_tokens // 0)' "$1" 2>/dev/null
+}
+
+# True (and sets CTX_TOKENS, CTX_AT) when the context has reached the session's current lock level:
+# CTX_LIMIT at first, then the step stored by the last "unlock:" (none left = never locked again).
+ctx_locked() { # ctx_locked SID TRANSCRIPT
+  local at=$CTX_LIMIT f="$COUNT_DIR/$1.ctx.json"
+  [ -f "$f" ] && { at=$(jq -r '.next // empty' "$f" 2>/dev/null); [ -n "$at" ] || return 1; }
+  CTX_TOKENS=$(ctx_tokens "$2"); [ -n "$CTX_TOKENS" ] || return 1
+  CTX_AT=$at
+  [ "$CTX_TOKENS" -ge "$at" ]
+}
+
+# First step strictly above the given token count; nothing when none is left.
+ctx_next() { # ctx_next TOKENS
+  local x
+  for x in $CTX_STEPS; do [ "$x" -gt "$1" ] && { echo "$x"; return; }; done
+}
+
+ctx_reason() { # ctx_reason TOKENS
+  echo "Contexte de la session à $(($1 / 1000))k tokens (seuil $((CTX_AT / 1000))k) : verrouillée. Tape unlock: en début de prompt pour continuer ici, ou /clear (ou /compact) pour repartir léger."
+}
+
 valid_sid() { [[ $1 =~ ^[A-Za-z0-9_-]+$ ]]; }
 
 prompt_mode() {
-  local in sid prompt n q start cap note f tmp
+  local in sid prompt n q start cap note f tmp tr nxt
   in=$(cat)
   sid=$(jq -r '.session_id // empty' <<<"$in" 2>/dev/null)
   prompt=$(jq -r '.prompt // empty' <<<"$in" 2>/dev/null)
+  tr=$(jq -r '.transcript_path // empty' <<<"$in" 2>/dev/null)
   valid_sid "$sid" || exit 0
   # Dead sessions: purge by age. A resumed session keeps its state if it comes back
   # within 24 h (same session_id assumed; unverified), otherwise it is purged here.
   find "$COUNT_DIR" -name '*.json' -mmin +"$STALE_MIN" -delete 2>/dev/null
+
+  # Context lock: "unlock:" lifts it for the rest of the session; anything else is blocked.
+  if [[ $prompt =~ ^[[:space:]]*(\<pasted_content[^\>]*\>[[:space:]]*)?unlock:([[:space:]]|$) ]]; then
+    if ctx_locked "$sid" "$tr"; then
+      mkdir -p "$COUNT_DIR"
+      tmp="$COUNT_DIR/$sid.ctx.json.tmp.$$"
+      nxt=$(ctx_next "$CTX_TOKENS")
+      jq -n --argjson t "$NOW" --argjson k "$CTX_TOKENS" --arg n "$nxt" \
+        '{unlocked_at: $t, tokens: $k, next: (if $n == "" then null else ($n | tonumber) end)}' > "$tmp" && mv "$tmp" "$COUNT_DIR/$sid.ctx.json" || rm -f "$tmp"
+      emit UserPromptSubmit "Verrou de contexte déverrouillé par l'utilisateur (contexte à $((CTX_TOKENS / 1000))k tokens, prochain verrou ${nxt:+à $((nxt / 1000))k}${nxt:-aucun}). Continue la tâche ; garde en tête que chaque appel coûte cher à cette taille."
+    else
+      emit UserPromptSubmit "Aucun verrou de contexte actif dans cette session : unlock: ignoré."
+    fi
+    exit 0
+  fi
+  if ctx_locked "$sid" "$tr"; then
+    emit_block "$(ctx_reason "$CTX_TOKENS")"
+    exit 0
+  fi
 
   # A pasted prompt arrives wrapped in <pasted_content id="...">: the prefix right after it counts.
   if ! [[ $prompt =~ ^[[:space:]]*(\<pasted_content[^\>]*\>[[:space:]]*)?count:(off|finish|[1-9][0-9]*)([[:space:]]|$) ]]; then
@@ -125,8 +179,8 @@ prompt_mode() {
   emit UserPromptSubmit "Compte de tâche : $(jq -n --argjson s "$start" --argjson c "$cap" '$c - $s | floor') % de la fenêtre 5 h (départ à $(jq -n --argjson s "$start" '$s | floor') %), consommé 0, plafond atteint à $(jq -n --argjson c "$cap" '$c | floor') %.${note} Surveille ta consommation. Au plafond, arrête-toi proprement et résume où tu en es. Quand la tâche est terminée, demande à l'utilisateur s'il veut clore le compte (count:off)."
 }
 
-tool_mode() {
-  local in sid f m c b pct cap level tmp
+tool_mode() { # tool_mode [EVENT]: PostToolUse by default, PostToolUseFailure for "fail"
+  local ev=${1:-PostToolUse} in sid f m c b pct cap level tmp
   in=$(cat)
   sid=$(jq -r '.session_id // empty' <<<"$in" 2>/dev/null)
   valid_sid "$sid" || exit 0
@@ -144,19 +198,25 @@ tool_mode() {
   jq --argjson p "$pct" '.fired = ([50, 80, 100] | map(select(. <= $p)))' "$f" > "$tmp" && mv "$tmp" "$f" || { rm -f "$tmp"; exit 0; }
 
   case "$level" in
-    50)  emit PostToolUse "Compte de tâche : 50 % consommé (${c}/${b} % de la fenêtre 5 h, plafond à ${cap} %). Garde un rythme compatible avec le plafond." ;;
-    80)  emit PostToolUse "Compte de tâche : 80 % consommé (${c}/${b} % de la fenêtre 5 h, plafond à ${cap} %). Il reste peu : va à l'essentiel, prépare une conclusion." ;;
-    100) emit PostToolUse "Compte de tâche : plafond atteint (${c}/${b} % de la fenêtre 5 h, plafond à ${cap} %). Arrête-toi à la fin de cette étape, ne lance rien de nouveau, résume où tu en es et ce qui reste, puis demande à l'utilisateur : count:finish (terminer l'étape), count:N (nouveau plafond) ou count:off (tâche terminée)." ;;
+    50)  emit "$ev" "Compte de tâche : 50 % consommé (${c}/${b} % de la fenêtre 5 h, plafond à ${cap} %). Garde un rythme compatible avec le plafond." ;;
+    80)  emit "$ev" "Compte de tâche : 80 % consommé (${c}/${b} % de la fenêtre 5 h, plafond à ${cap} %). Il reste peu : va à l'essentiel, prépare une conclusion." ;;
+    100) emit "$ev" "Compte de tâche : plafond atteint (${c}/${b} % de la fenêtre 5 h, plafond à ${cap} %). Arrête-toi à la fin de cette étape, ne lance rien de nouveau, résume où tu en es et ce qui reste, puis demande à l'utilisateur : count:finish (terminer l'étape), count:N (nouveau plafond) ou count:off (tâche terminée)." ;;
   esac
 }
 
 # Lock: from 90 % of the count every tool is denied, unless "count:finish" granted it for
 # this turn. Reads the state and quota files only; silent below 90 % and whenever data is missing.
 pre_mode() {
-  local in sid f m c b pct cap q used reset left at who=""
+  local in sid f m c b pct cap q used reset left at who="" tr
   in=$(cat)
   sid=$(jq -r '.session_id // empty' <<<"$in" 2>/dev/null)
+  tr=$(jq -r '.transcript_path // empty' <<<"$in" 2>/dev/null)
   valid_sid "$sid" || exit 0
+  if ctx_locked "$sid" "$tr"; then
+    [ -n "$(jq -r '.agent_id // empty' <<<"$in" 2>/dev/null)" ] && who=" Tu es un sous-agent : rends la main à l'orchestrateur avec ce constat."
+    emit_deny "$(ctx_reason "$CTX_TOKENS") Outil refusé. Arrête l'étape, résume où tu en es et demande à l'utilisateur.${who}"
+    exit 0
+  fi
   f="$COUNT_DIR/$sid.json"
   [ -f "$f" ] || exit 0
   jq -e '.grant == true' "$f" >/dev/null 2>&1 && exit 0
@@ -232,6 +292,7 @@ case "$1" in
   tokens) tokens_mode "$2" ;;
   prompt) prompt_mode ;;
   tool)   tool_mode ;;
+  fail)   tool_mode PostToolUseFailure ;;
   pre)    pre_mode ;;
   stop)   stop_mode ;;
   status) status_mode "$2" ;;
