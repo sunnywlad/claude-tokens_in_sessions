@@ -150,7 +150,7 @@ prompt young "hello" > /dev/null
 check "cleanup: old removed" $([ ! -e "$COUNT_DIR/old.json" ]; echo $?)
 check "cleanup: young kept" $([ -e "$COUNT_DIR/young.json" ]; echo $?)
 
-# 14. Resume: same session_id keeps its state (if the id is stable, see report)
+# 14. Resume: same session_id keeps its state (seen in a real session, 2026-10-19: --resume keeps the id)
 reset; quota 10; prompt r1 "count:20 go" > /dev/null
 quota 20; prompt r1 "continue" > /dev/null
 check "resume: state kept as is" $([ "$(state r1 .start)" = 10 ]; echo $?)
@@ -373,9 +373,9 @@ check "failure: no count, silent" $([ -z "$out" ]; echo $?)
 # 26. Edge cases of the prompt hook (point 6), with a lock and without
 reset; quota 10; prompt s1 "count:20 go" > /dev/null; quota 28
 out=$(prompt s1 "/clear")
-check "/clear at the lock: blocked like any prompt (built-ins may bypass the hook, unverified)" $([ "$(echo "$out" | jq -r .decision)" = block ]; echo $?)
+check "/clear at the lock: the hook blocks it if called (real session 2026-10-19: Claude Code does not call it)" $([ "$(echo "$out" | jq -r .decision)" = block ]; echo $?)
 out=$(prompt s1 "/compact")
-check "/compact at the lock: blocked like any prompt" $([ "$(echo "$out" | jq -r .decision)" = block ]; echo $?)
+check "/compact at the lock: the hook blocks it if called (real session 2026-10-19: Claude Code does not call it)" $([ "$(echo "$out" | jq -r .decision)" = block ]; echo $?)
 reset; quota 10
 out=$(prompt s1 "/clear")
 check "/clear without count: silent" $([ -z "$out" ] && [ ! -e "$COUNT_DIR/s1.json" ]; echo $?)
@@ -458,6 +458,64 @@ check "ctx: limit overridable" $([ -z "$(cpre c3)" ]; echo $?)
 unset COUNT_CTX_LIMIT
 reset; quota 10; : > "$TR"; tr_line m1 false 160000 >> "$TR"; prompt c4 "count:20 go" > /dev/null
 check "ctx: unlocking leaves a count untouched" $(cprompt c4 "unlock:" > /dev/null; [ "$(state c4 .cap)" = 30 ]; echo $?)
+
+# 28. unlock:free: no context limit for the rest of the session (night-run style), even before any lock.
+# The count: lock is untouched; other sessions are untouched.
+reset; quota 10; : > "$TR"; tr_line m1 false 150000 >> "$TR"
+out=$(cprompt f1 "unlock:free")
+check "free: passes at the lock, says so" $([ -z "$(echo "$out" | jq -r '.decision // empty')" ] && echo "$out" | ctx | grep -q "désactivé"; echo $?)
+check "free: tools allowed" $([ -z "$(cpre f1)" ]; echo $?)
+tr_line m2 false 900000 >> "$TR"
+check "free: no lock at 900k either (tools and prompts)" $([ -z "$(cpre f1)" ] && [ -z "$(cprompt f1 hello)" ]; echo $?)
+check "free: other session still locked" $([ -n "$(cpre f2)" ]; echo $?)
+out=$(cprompt f1 "unlock:")
+check "free: plain unlock afterwards is ignored" $(echo "$out" | ctx | grep -qi "aucun verrou"; echo $?)
+reset; quota 10; : > "$TR"; tr_line m1 false 1000 >> "$TR"
+out=$(cprompt f3 "unlock:free")
+check "free before any lock: accepted" $(echo "$out" | ctx | grep -q "désactivé"; echo $?)
+tr_line m2 false 900000 >> "$TR"
+check "free before any lock: never locked later" $([ -z "$(cpre f3)" ] && [ -z "$(cprompt f3 hello)" ]; echo $?)
+out=$(cprompt f4 $'<pasted_content id="e1">\nunlock:free')
+check "free: accepted after the paste wrapper" $(echo "$out" | ctx | grep -q "désactivé"; echo $?)
+check "free: pasted, lock gone" $([ -z "$(cpre f4)" ]; echo $?)
+reset; quota 10; : > "$TR"; tr_line m1 false 160000 >> "$TR"
+out=$(cprompt f5 "unlock:freedom")
+check "free: unlock:freedom is not unlock:free (blocked as ordinary prompt)" $([ "$(echo "$out" | jq -r .decision)" = block ]; echo $?)
+reset; quota 10; : > "$TR"; tr_line m1 false 160000 >> "$TR"; prompt f6 "count:20 go" > /dev/null
+cprompt f6 "unlock:free" > /dev/null; quota 28
+check "free: the count: lock still denies at 90 %" $([ -n "$(cpre f6)" ]; echo $?)
+rm -rf "$COUNT_DIR"; quota 10
+out=$(cprompt f7 "unlock:free"); rc=$?
+check "free: creates the state dir when absent, rc 0" $([ $rc -eq 0 ] && [ -f "$COUNT_DIR/f7.ctx.json" ]; echo $?)
+
+# 29. SubagentHandback is how a sub-agent delivers its report (real session 2026-10-19: denied four
+# times, report lost): "pre" lets it through under both locks, while every other tool stays denied
+hpre() { jq -n --arg s "$1" --arg t "$2" --arg tr "$TR" '{session_id: $s, transcript_path: $tr, tool_name: $t, agent_id: "a1", hook_event_name: "PreToolUse"}' | $B pre; }
+reset; quota 10; : > "$TR"; tr_line m1 false 1000 >> "$TR"; prompt h1 "count:20 go" > /dev/null; quota 28
+check "handback: count lock denies Bash" $([ -n "$(hpre h1 Bash)" ]; echo $?)
+check "handback: count lock lets SubagentHandback through" $([ -z "$(hpre h1 SubagentHandback)" ]; echo $?)
+check "handback: count lock denies a lookalike tool name" $([ -n "$(hpre h1 SubagentHandbackX)" ]; echo $?)
+reset; quota 10; : > "$TR"; tr_line m1 false 150000 >> "$TR"
+check "handback: context lock denies Bash" $([ -n "$(hpre h2 Bash)" ]; echo $?)
+check "handback: context lock lets SubagentHandback through" $([ -z "$(hpre h2 SubagentHandback)" ]; echo $?)
+
+# 30. A sub-agent's end-of-task <task-notification> arrives as a prompt (real session 2026-10-19: blocked
+# at the lock, report never received): the count lock lets it through, any other prompt stays blocked
+reset; quota 10; prompt n1 "count:20 go" > /dev/null; quota 28
+out=$(prompt n1 $'<task-notification>\n<task-id>a1</task-id>\n<status>completed</status>\n</task-notification>')
+check "notification: passes the count lock" $([ -z "$out" ]; echo $?)
+out=$(prompt n1 $'  \n<task-notification>x</task-notification>')
+check "notification: leading whitespace accepted" $([ -z "$out" ]; echo $?)
+out=$(prompt n1 $'hello <task-notification>x</task-notification>')
+check "notification: not at the start, still blocked" $([ "$(echo "$out" | jq -r .decision)" = block ]; echo $?)
+out=$(prompt n1 "<task-notifications>x")
+check "notification: lookalike tag still blocked" $([ "$(echo "$out" | jq -r .decision)" = block ]; echo $?)
+check "notification: no state change" $([ "$(state n1 .start)" = 10 ] && [ "$(state n1 '.grant // false')" = false ]; echo $?)
+reset; quota 10; : > "$TR"; tr_line m1 false 150000 >> "$TR"
+out=$(cprompt n2 "<task-notification>x</task-notification>")
+check "notification: passes the context lock too" $([ -z "$out" ]; echo $?)
+out=$(cprompt n2 "hello <task-notification>x</task-notification>")
+check "notification: context lock still blocks it when not at the start" $([ "$(echo "$out" | jq -r .decision)" = block ]; echo $?)
 
 echo "passed: $pass, failed: $fail"
 [ "$fail" -eq 0 ]

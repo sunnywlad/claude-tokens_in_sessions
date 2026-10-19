@@ -102,7 +102,7 @@ fichier. L'état de chaque session vit dans `~/.claude/count/<session_id>.json`
 bash test-count.sh
 ```
 
-174 vérifications, dans un `$HOME` temporaire, sans toucher à ta configuration :
+198 vérifications, dans un `$HOME` temporaire, sans toucher à ta configuration :
 pose, plafond borné, fenêtre pleine, quota inutilisable (absent, vide,
 malformé, périmé), `off`, seuils une seule fois, saut de seuils, réinitialisation
 de fenêtre, gigue de `resets_at`, deux sessions, `session_id` absent ou
@@ -129,9 +129,9 @@ ont été vus en session réelle le 2026-10-18 (voir la section suivante).
    50, 80 et 100 % une seule fois chacun ; au plafond la session s'arrête et résume.
 4. Envoyer `count:off`. Attendu : fichier d'état supprimé, segment absent.
 5. Points ouverts, à trancher par l'expérience :
-   - **Reprise** : le `session_id` reste-t-il le même avec `--resume` ? La doc
-     ne le dit pas. Lancer un budget, quitter, rouvrir avec `--resume`, regarder
-     si `task` réapparaît.
+   - **Reprise** : fait, vu en réel le 2026-10-19 (`count:2`, quitter par Ctrl+D,
+     `claude --resume <id>`) : le `session_id` est identique et `task 0/2`
+     réapparaît aussitôt, avant toute réponse API.
    - **Sous-agents** : leurs appels d'outils déclenchent-ils `PostToolUse` avec
      le `session_id` du parent ?
    - **Décalage** : la status line n'écrit `quota.json` qu'à chaque événement et
@@ -285,11 +285,16 @@ Non vu en réel : `count:finish` (levée puis retombée à la fin du tour),
   tout prompt. `unlock:` en début de prompt (collé accepté) lève le verrou
   (`<sid>.ctx.json`) ; il reprend à 180k puis à 220k, un `unlock:` par palier, et
   plus après le dernier. Sans verrou actif, `unlock:` est ignoré.
+  `unlock:free` (début de prompt, collé accepté) supprime toute limite de contexte
+  pour la session, verrou actif ou non, donc posable d'avance (style run de nuit) ;
+  le verrou du compte `count:` reste actif, et un `/clear` donne un nouveau
+  `session_id`, donc il faut le retaper.
   Seuils réglables par `COUNT_CTX_LIMIT` et `COUNT_CTX_STEPS`. Vu en réel :
   `unlock:` à 159k, message « prochain verrou à 180k » (le premier jet affichait
-  « 180k180000 », corrigé, test rouge d'abord). Non vu : `/clear` et `/compact`
-  passent-ils par le hook de prompt (sinon ils échappent au blocage, ce qui est
-  voulu).
+  « 180k180000 », corrigé, test rouge d'abord). `/compact` ne passe pas par le hook de prompt : vu
+  en réel (2026-10-19), exécuté au verrou du compte sans refus, `task 1/1` conservé,
+  contexte retombé à 0k. `/clear` non plus : passé au verrou sans refus, `task`
+  disparu (nouveau `session_id`), ancien état laissé orphelin jusqu'à la purge à 24 h.
 - **Outils en échec** : hook `PostToolUseFailure` (`count.sh fail`), mêmes seuils
   que `tool`, `fired` partagé. Vu en réel (`count:1`, départ 28 %) : après
   `count:finish`, un `Read` sur un fichier absent a déclenché le rappel « plafond
@@ -298,11 +303,34 @@ Non vu en réel : `count:finish` (levée puis retombée à la fin du tour),
   s'est franchi par le travail normal. Le verrou `PreToolUse` à 1/1 a refusé
   l'outil suivant, donc l'essai d'un échec au plafond exige `count:finish`.
 
+### Essais réels du point 6 (2026-10-19)
+
+- **`/compact` et `/clear`** : ne passent pas par le hook de prompt (verrou du compte actif,
+  aucun refus). `/clear` donne un nouveau `session_id`, l'ancien état reste orphelin 24 h.
+- **`--resume`** : même `session_id`, `task` réapparaît aussitôt.
+- **`unlock:free`** (fait, tests rouges d'abord, 186 verts) : supprime toute limite de contexte
+  pour la session, verrou actif ou non ; le verrou `count:` reste ; à retaper après `/clear`.
+- **Sous-agent sous `count:1`** (vu en réel) : un seul `Read` de la revue a coûté 1 point, donc
+  dépassement avant tout refus possible. Puis `pre` a refusé `SubagentHandback`, l'outil par
+  lequel le sous-agent livre son rapport : quatre retries (task 2/1, 75k tokens, 5 outils),
+  fin sans rapport livré, travail perdu. De plus la `<task-notification>` de fin de sous-agent
+  arrive comme un prompt et le hook de prompt l'a refusée : l'orchestrateur ne l'a pas reçue.
+- **Correctif A fait** (test rouge d'abord, 191 verts) : `pre` laisse toujours passer
+  `SubagentHandback`, sous le verrou du compte comme sous le verrou de contexte. Pas
+  encore revu en réel.
+- **Point B fait** (décision de Wladimir : oui, 197 verts, test rouge d'abord) : le hook de prompt
+  laisse passer un prompt qui commence par `<task-notification>` au verrou du compte. Le verrou
+  de contexte aussi (étendu sur ordre de Wladimir : perdre un rapport est pire). Pas encore revu en réel. Texte d'origine : B, le hook de prompt laisse passer `<task-notification>` : décision
+  de Wladimir en attente (rapport reçu au prix d'un tour de modèle, ou perdu).
+- **`Stop`** : question ouverte, aucun cas d'usage (bloquer `Stop` force à continuer, l'inverse
+  d'un plafond) ; clos « sans objet » (2026-10-19), sauf cas précis de Wladimir.
+
 ### Prochaine session, dans cet ordre
 
 1. **Refuser le prompt au verrou : fait et vu en réel** (2026-10-18). Seuls les
-   préfixes `count:` passent. Reste à éprouver : `/clear` ou une commande
-   intégrée passe-t-elle par ce hook (supposé que non).
+   préfixes `count:` passent. `/compact` ne passe pas par ce hook (vu en
+   réel, 2026-10-19). `/clear` non plus (nouveau `session_id`, état
+   orphelin purgé à 24 h). Point clos.
 2. **Status line figée sur une session au repos : corrigé et vu en réel**
    (2026-10-18, quatrième et cinquième passes). L'écran se repeint bien (horloge
    test). Deux causes : des sessions inactives écrasaient `quota.json` avec des
@@ -362,7 +390,10 @@ Non vu en réel : `count:finish` (levée puis retombée à la fin du tour),
    `~/.claude/count/calib.log`, sessions avec un `count:` actif seulement : `t`, `sid`,
    `used`, `resets_at`, `tokens` par modèle). Première lecture réelle : 4 lignes
    cohérentes ; 240k tokens de cache lu sans bouger `used`.
-   **Prochaine étape** : essais d'étalonnage (fenêtre seule, hors réinitialisation,
+   **Étalonnage écarté (2026-10-19, Wladimir)** : il utilise Claude dans d'autres sessions, donc
+   la fenêtre ne peut pas être isolée et K ne peut pas être étalonné proprement. Le point 4
+   reste en l'état (étape 1 faite, journal `calib.log`), sans comptage en points.
+   Texte antérieur, caduc : **Prochaine étape** : essais d'étalonnage (fenêtre seule, hors réinitialisation,
    compositions de tokens contrastées, au moins 5 points chacun), puis validation sur
    un essai tenu à part ; ensuite seulement, le comptage en points dans `count.sh`.
 5. **Outils en échec : fait et vu en réel** (2026-10-19, voir la section
@@ -422,6 +453,6 @@ Bash and `jq` only.
   is injected.
 - The `count:N` prefix stays in the prompt: hooks cannot rewrite it.
 
-Install: see the settings snippet above. Tests: `bash test-count.sh` (174 checks
+Install: see the settings snippet above. Tests: `bash test-count.sh` (198 checks
 in a throwaway `$HOME`). The French section lists what is still unverified in a
 live session (resume, subagents, update lag).

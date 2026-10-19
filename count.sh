@@ -8,6 +8,7 @@
 #   count.sh status SID    for the status line: prints "consumed count pct", or nothing
 # Context lock (independent of count:): from COUNT_CTX_LIMIT tokens of context (default 150000)
 # "pre" denies every tool and "prompt" blocks every prompt, until the user types "unlock:".
+# "unlock:free" removes the context limit for the whole session, lock active or not.
 # State: $COUNT_DIR/<session_id>.json, written only by that session (atomic tmp + mv).
 # Quota: quota.json, written by statusline.sh. Env overrides exist for the tests.
 
@@ -108,6 +109,15 @@ prompt_mode() {
   # within 24 h (same session_id assumed; unverified), otherwise it is purged here.
   find "$COUNT_DIR" -name '*.json' -mmin +"$STALE_MIN" -delete 2>/dev/null
 
+  # "unlock:free": no context limit for the rest of the session, even before any lock.
+  if [[ $prompt =~ ^[[:space:]]*(\<pasted_content[^\>]*\>[[:space:]]*)?unlock:free([[:space:]]|$) ]]; then
+    mkdir -p "$COUNT_DIR"
+    tmp="$COUNT_DIR/$sid.ctx.json.tmp.$$"
+    jq -n --argjson t "$NOW" '{unlocked_at: $t, free: true, next: null}' > "$tmp" && mv "$tmp" "$COUNT_DIR/$sid.ctx.json" || rm -f "$tmp"
+    emit UserPromptSubmit "Verrou de contexte désactivé par l'utilisateur pour toute la session (unlock:free) : aucune limite de contexte. Continue la tâche ; garde en tête que chaque appel coûte cher quand le contexte grossit."
+    exit 0
+  fi
+
   # Context lock: "unlock:" lifts it for the rest of the session; anything else is blocked.
   if [[ $prompt =~ ^[[:space:]]*(\<pasted_content[^\>]*\>[[:space:]]*)?unlock:([[:space:]]|$) ]]; then
     if ctx_locked "$sid" "$tr"; then
@@ -122,6 +132,8 @@ prompt_mode() {
     fi
     exit 0
   fi
+  # A sub-agent's end-of-task notification arrives as a prompt: it passes both locks (count and context).
+  [[ $prompt =~ ^[[:space:]]*\<task-notification\> ]] && exit 0
   if ctx_locked "$sid" "$tr"; then
     emit_block "$(ctx_reason "$CTX_TOKENS")"
     exit 0
@@ -212,6 +224,8 @@ pre_mode() {
   sid=$(jq -r '.session_id // empty' <<<"$in" 2>/dev/null)
   tr=$(jq -r '.transcript_path // empty' <<<"$in" 2>/dev/null)
   valid_sid "$sid" || exit 0
+  # SubagentHandback is how a locked sub-agent delivers its report: never deny it.
+  [ "$(jq -r '.tool_name // empty' <<<"$in" 2>/dev/null)" = SubagentHandback ] && exit 0
   if ctx_locked "$sid" "$tr"; then
     [ -n "$(jq -r '.agent_id // empty' <<<"$in" 2>/dev/null)" ] && who=" Tu es un sous-agent : rends la main à l'orchestrateur avec ce constat."
     emit_deny "$(ctx_reason "$CTX_TOKENS") Outil refusé. Arrête l'étape, résume où tu en es et demande à l'utilisateur.${who}"
