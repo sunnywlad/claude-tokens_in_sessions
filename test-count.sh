@@ -511,6 +511,17 @@ check "notification: not at the start, still blocked" $([ "$(echo "$out" | jq -r
 out=$(prompt n1 "<task-notifications>x")
 check "notification: lookalike tag still blocked" $([ "$(echo "$out" | jq -r .decision)" = block ]; echo $?)
 check "notification: no state change" $([ "$(state n1 .start)" = 10 ] && [ "$(state n1 '.grant // false')" = false ]; echo $?)
+AM=$'<agent-message from="a61771f4f60f713ed">\n[Subagent hand-back] The text below is the final report.\n</agent-message>'   # real wrapper seen 2026-10-19
+reset; quota 10; prompt n3 "count:20 go" > /dev/null; quota 28
+out=$(prompt n3 "$AM")
+check "agent-message: passes the count lock" $([ -z "$out" ]; echo $?)
+out=$(prompt n3 "hello $AM")
+check "agent-message: not at the start, still blocked" $([ "$(echo "$out" | jq -r .decision)" = block ]; echo $?)
+out=$(prompt n3 "<agent-messages>x")
+check "agent-message: lookalike tag still blocked" $([ "$(echo "$out" | jq -r .decision)" = block ]; echo $?)
+reset; quota 10; : > "$TR"; tr_line m1 false 150000 >> "$TR"
+out=$(cprompt n4 "$AM")
+check "agent-message: passes the context lock too" $([ -z "$out" ]; echo $?)
 reset; quota 10; : > "$TR"; tr_line m1 false 150000 >> "$TR"
 out=$(cprompt n2 "<task-notification>x</task-notification>")
 check "notification: passes the context lock too" $([ -z "$out" ]; echo $?)

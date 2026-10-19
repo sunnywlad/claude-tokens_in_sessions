@@ -132,8 +132,8 @@ prompt_mode() {
     fi
     exit 0
   fi
-  # A sub-agent's end-of-task notification arrives as a prompt: it passes both locks (count and context).
-  [[ $prompt =~ ^[[:space:]]*\<task-notification\> ]] && exit 0
+  # A sub-agent report arrives as a prompt (<agent-message from=...> seen in real, <task-notification> assumed): it passes both locks (count and context).
+  [[ $prompt =~ ^[[:space:]]*\<(task-notification|agent-message)[[:space:]\>] ]] && exit 0
   if ctx_locked "$sid" "$tr"; then
     emit_block "$(ctx_reason "$CTX_TOKENS")"
     exit 0

@@ -102,7 +102,7 @@ fichier. L'état de chaque session vit dans `~/.claude/count/<session_id>.json`
 bash test-count.sh
 ```
 
-198 vérifications, dans un `$HOME` temporaire, sans toucher à ta configuration :
+202 vérifications, dans un `$HOME` temporaire, sans toucher à ta configuration :
 pose, plafond borné, fenêtre pleine, quota inutilisable (absent, vide,
 malformé, périmé), `off`, seuils une seule fois, saut de seuils, réinitialisation
 de fenêtre, gigue de `resets_at`, deux sessions, `session_id` absent ou
@@ -320,7 +320,7 @@ Non vu en réel : `count:finish` (levée puis retombée à la fin du tour),
   encore revu en réel.
 - **Point B fait** (décision de Wladimir : oui, 197 verts, test rouge d'abord) : le hook de prompt
   laisse passer un prompt qui commence par `<task-notification>` au verrou du compte. Le verrou
-  de contexte aussi (étendu sur ordre de Wladimir : perdre un rapport est pire). Pas encore revu en réel. Texte d'origine : B, le hook de prompt laisse passer `<task-notification>` : décision
+  de contexte aussi (étendu sur ordre de Wladimir : perdre un rapport est pire). Essai réel 2026-10-19 : A confirmé (le sous-agent a livré son rapport sous `count:1`). B raté : le rapport est arrivé en `<agent-message from="...">`, pas en `<task-notification>`, et le hook l'a bloqué. Corrigé : les deux balises passent (202 verts), vu en réel (2e essai, `count:1`, task 2/1) : l'orchestrateur a reçu le rapport du sous-agent au verrou, sans refus de prompt. Texte d'origine : B, le hook de prompt laisse passer `<task-notification>` : décision
   de Wladimir en attente (rapport reçu au prix d'un tour de modèle, ou perdu).
 - **`Stop`** : question ouverte, aucun cas d'usage (bloquer `Stop` force à continuer, l'inverse
   d'un plafond) ; clos « sans objet » (2026-10-19), sauf cas précis de Wladimir.
@@ -453,6 +453,6 @@ Bash and `jq` only.
   is injected.
 - The `count:N` prefix stays in the prompt: hooks cannot rewrite it.
 
-Install: see the settings snippet above. Tests: `bash test-count.sh` (198 checks
+Install: see the settings snippet above. Tests: `bash test-count.sh` (202 checks
 in a throwaway `$HOME`). The French section lists what is still unverified in a
 live session (resume, subagents, update lag).
