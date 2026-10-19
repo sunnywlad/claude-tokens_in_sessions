@@ -473,7 +473,17 @@ Non vu en réel : `count:finish` (levée puis retombée à la fin du tour),
      pas d'injection en cours de tour (rappels au début du tour suivant). Pas de segment
      `task` ni de verrou de contexte (pas de transcript). `count.sh` actif copié dans
      `~/.claude/`.
-   - Reste : brancher les trois hooks dans `~/.hermes/profiles/claudesub/config.yaml`
+   - **Étape 2 branchée et vue en réel (2026-10-19)** : bloc `hooks:` (`pre_llm_call`,
+     `pre_tool_call`, `on_session_end`, commande `bash /home/wladimir/.claude/count.sh hermes
+     llm|pre|end`, timeout 10) ajouté à `claudesub` puis `redacteur` (sauvegardes
+     `config.yaml.pre-hooks`). Consentement accordé par `hermes chat --accept-hooks` (chemin
+     absolu, pas de `~`, le hook est lancé sans shell). `claudesub` `count:1` : état créé
+     (start 38, cap 39), le modèle conclut par la question de fin. `redacteur` `count:1` : état
+     créé. Verrou vu à la main (quota simulé à 39) : `pre` bloque, `llm` ordonne le relais.
+     Pas encore vu : un refus en vrai ; la passerelle (démarrée 18:15, après le correctif de
+     16:13, donc plugin patché) n'a pas rechargé les hooks, redémarrage nécessaire. Le
+     profil `recherche` a un `directsdk.py` sans correctif ni hooks.
+   - Reste (ancien) : brancher les trois hooks dans `~/.hermes/profiles/claudesub/config.yaml`
      (profil d'essai, jamais `default`), accepter le consentement, essai réel avec
      `count:1` à `count:3` (`hermes -p claudesub chat -q`), puis `redacteur`. Vérifier
      que la passerelle relance bien le plugin patché. Un affichage de l'état côté
