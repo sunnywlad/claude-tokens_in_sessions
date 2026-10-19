@@ -102,7 +102,7 @@ fichier. L'état de chaque session vit dans `~/.claude/count/<session_id>.json`
 bash test-count.sh
 ```
 
-202 vérifications, dans un `$HOME` temporaire, sans toucher à ta configuration :
+220 vérifications, dans un `$HOME` temporaire, sans toucher à ta configuration :
 pose, plafond borné, fenêtre pleine, quota inutilisable (absent, vide,
 malformé, périmé), `off`, seuils une seule fois, saut de seuils, réinitialisation
 de fenêtre, gigue de `resets_at`, deux sessions, `session_id` absent ou
@@ -419,6 +419,53 @@ Non vu en réel : `count:finish` (levée puis retombée à la fin du tour),
    s'appliquent, et il faudrait un autre point d'accroche. Lien avec le point 4 :
    un compteur par session (tokens du transcript) pourrait convenir à des agents
    sans status line.
+   **Établi le 2026-10-19 (lecture du code, un essai réel du flux)** :
+   - Les profils `claudesub` et `redacteur` passent par le plugin
+     `claude-subscription-directsdk-experimental` v0.3.3, qui lance le CLI officiel
+     `claude -p` à chaque appel modèle, dans un répertoire temporaire privé, avec
+     `--setting-sources ''`, `--settings <fichier privé>`, `--tools ''`,
+     `--max-turns 1`, `--no-session-persistence`.
+   - Conséquence : `~/.claude/settings.json` n'est pas lu, aucun hook de `count.sh`
+     ne s'exécute, la status line ne tourne pas, `quota.json` n'est jamais alimenté
+     par ces agents. Hermes exécute les outils lui-même.
+   - Points d'accroche Hermes (doc `hooks.md`, `VALID_HOOKS` dans
+     `hermes_cli/plugins.py`) : `pre_tool_call` (`{"action":"block","message":...}`,
+     échoue fermé, plugin Python ou script shell du profil) pour le verrou ;
+     `pre_gateway_dispatch` (`skip` ou `rewrite` du texte) pour poser `count:N` ;
+     `pre_llm_call` (`{"context": ...}`) pour la phrase de budget ; `post_api_request`
+     (champ `usage`, en tokens) pour les rappels. `pre_api_request` est un
+     observateur, retour ignoré : aucun refus d'appel modèle, même limite qu'ici.
+   - Les hooks sont rattachés à un profil : un plafond sur `claudesub` ne couvre pas
+     `redacteur` ni `default`.
+   - **Le flux du CLI porte la fenêtre** : `claude -p --output-format stream-json
+     --verbose` (2.1.303) émet un événement `rate_limit_event` avec
+     `unifiedWindows.five_hour.utilization` (0.26, fraction), `resetsAt`, le même
+     bloc pour `seven_day`, `status`, `overageStatus`. Au même instant `quota.json`
+     disait 25, même `resets_at`. Le plugin ne traite que `assistant`, `result` et
+     `stream_event` (`directsdk.py`, vers la ligne 690) et jette cet événement.
+   - Conséquence pour le point 4 : pour les agents Hermes, un plafond en points est
+     faisable sans conversion tokens vers points, si le plugin transmet la valeur.
+   - **Étape 1 faite et vue en réel (A, décision de Wladimir)** : `count.sh quota` lit un
+     `rate_limit_event` sur stdin et le fusionne dans `quota.json` avec les règles de la
+     status line (même fenêtre à 60 s près : valeur plus basse perdante ; fenêtre plus
+     ancienne ignorée ; plus récente remplaçante ; `utilization` fraction convertie en
+     entier, `seven_day` mis à jour s'il est présent ; entrée inutilisable : fichier
+     intact, silence). Tests écrits rouges d'abord (220 verts). Le plugin appelle
+     `bash ~/.claude/count.sh quota` sur chaque `rate_limit_event`, 6 lignes ajoutées
+     dans `directsdk.py` des profils `claudesub` et `redacteur` (copies `.orig` à côté).
+     Essai réel (`hermes -p claudesub chat -q`, `QUOTA_FILE` redirigé vers un fichier
+     de scratchpad) : le fichier reçoit 31 % alors que `quota.json` disait 30, donc la
+     valeur de Hermes était la plus fraîche. Un processus Hermes déjà lancé (passerelle)
+     garde l'ancien code jusqu'à son redémarrage.
+   - Le plugin est épinglé (`pinned: true`, révision `682b22d`, dépôt
+     `NousResearch/hermes-official-plugins`) : d'après le code de `plugins_cmd_update.py`,
+     `hermes plugins update` refuse les installations épinglées, donc le correctif
+     devrait survivre. Non vérifié. Une réinstallation ou un dépôt amont plus récent
+     l'efface ; les `.orig` et ce paragraphe servent à le refaire.
+   - Reste, dans l'ordre : le préfixe `count:N` côté Hermes (`pre_gateway_dispatch`),
+     la phrase de budget (`pre_llm_call`), les rappels, le verrou (`pre_tool_call`),
+     `finish` et `off`, le segment d'affichage. Même forme que dans le terminal, à
+     ajuster à l'usage (décision de Wladimir).
 
 Règles de la passe : un point à la fois, `count:3` ou `count:5` pour les essais,
 aucun lancement manuel de `statusline.sh` avec de fausses valeurs, pas de
@@ -463,6 +510,6 @@ Bash and `jq` only.
   is injected.
 - The `count:N` prefix stays in the prompt: hooks cannot rewrite it.
 
-Install: see the settings snippet above. Tests: `bash test-count.sh` (202 checks
+Install: see the settings snippet above. Tests: `bash test-count.sh` (220 checks
 in a throwaway `$HOME`). The French section lists what is still unverified in a
 live session (resume, subagents, update lag).

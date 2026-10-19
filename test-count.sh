@@ -528,5 +528,46 @@ check "notification: passes the context lock too" $([ -z "$out" ]; echo $?)
 out=$(cprompt n2 "hello <task-notification>x</task-notification>")
 check "notification: context lock still blocks it when not at the start" $([ "$(echo "$out" | jq -r .decision)" = block ]; echo $?)
 
+# Hermes: the plugin forwards the CLI's rate_limit_event to "count.sh quota", which merges it into quota.json
+rle() { # rle FIVE_HOUR_FRACTION RESETS_AT [SEVEN_DAY_FRACTION]
+  jq -nc --argjson f "$1" --argjson r "$2" --argjson s "${3:-null}" '{type: "rate_limit_event", rate_limit_info: {status: "allowed", unifiedWindows: ({five_hour: {utilization: $f, resetsAt: $r}} + (if $s == null then {} else {seven_day: {utilization: $s, resetsAt: 1700000000}} end))}}'
+}
+qj() { jq -r "$1" "$QUOTA_FILE" 2>/dev/null; }
+reset
+rle 0.26 $FUT | $B quota
+check "quota event: file created, fraction to percent" $([ "$(qj .used_percentage)" = 26 ] && [ "$(qj .resets_at)" = $FUT ]; echo $?)
+rle 0.29 $FUT | $B quota
+check "quota event: float noise does not floor 29 to 28" $([ "$(qj .used_percentage)" = 29 ]; echo $?)
+rle 0.27 $FUT | $B quota
+check "quota event: same window, lower value loses" $([ "$(qj .used_percentage)" = 29 ]; echo $?)
+rle 0.27 $((FUT + 3)) | $B quota
+check "quota event: same window within 60 s, lower value still loses" $([ "$(qj .used_percentage)" = 29 ] && [ "$(qj .resets_at)" = $FUT ]; echo $?)
+rle 0.31 $FUT | $B quota
+check "quota event: same window, higher value wins" $([ "$(qj .used_percentage)" = 31 ]; echo $?)
+rle 0.90 $((FUT - 600)) | $B quota
+check "quota event: older window ignored" $([ "$(qj .used_percentage)" = 31 ] && [ "$(qj .resets_at)" = $FUT ]; echo $?)
+rle 0.02 $FUT2 | $B quota
+check "quota event: newer window replaces" $([ "$(qj .used_percentage)" = 2 ] && [ "$(qj .resets_at)" = $FUT2 ]; echo $?)
+reset; quota 40
+rle 0.45 $FUT 0.5 | $B quota
+check "quota event: seven_day stored" $([ "$(qj .seven_day_used_percentage)" = 50 ] && [ "$(qj .seven_day_resets_at)" = 1700000000 ]; echo $?)
+rle 0.46 $FUT | $B quota
+check "quota event: event without seven_day keeps the old one" $([ "$(qj .seven_day_used_percentage)" = 50 ] && [ "$(qj .used_percentage)" = 46 ]; echo $?)
+before=$(cat "$QUOTA_FILE")
+for junk in '' 'not json' '{}' '{"type":"rate_limit_event"}' '{"rate_limit_info":{"unifiedWindows":{"five_hour":{"utilization":"x","resetsAt":5}}}}'; do
+  out=$(echo "$junk" | $B quota 2>&1); rc=$?
+  check "quota event: junk '$junk' leaves the file and stays silent" $([ "$(cat "$QUOTA_FILE")" = "$before" ] && [ -z "$out" ] && [ $rc -eq 0 ]; echo $?)
+done
+echo '{"rate_limit_info":{"unifiedWindows":{"seven_day":{"utilization":0.1,"resetsAt":5}}}}' | $B quota
+check "quota event: seven_day alone updates only seven_day" $([ "$(qj .seven_day_used_percentage)" = 10 ] && [ "$(qj .used_percentage)" = 46 ]; echo $?)
+reset; echo 'broken' > "$QUOTA_FILE"
+rle 0.12 $FUT | $B quota
+check "quota event: malformed quota.json is replaced" $([ "$(qj .used_percentage)" = 12 ]; echo $?)
+reset; rle 0.10 $FUT | $B quota; prompt hq "count:20 go" > /dev/null
+rle 0.21 $FUT | $B quota
+out=$(tool hq)
+check "quota event: feeds the count (11/20 raises the 50 % reminder)" $(echo "$out" | ctx | grep -q "50 %"; echo $?)
+check "quota event: no leftover tmp file" $([ -z "$(ls "$T/.claude" | grep tmp)" ]; echo $?)
+
 echo "passed: $pass, failed: $fail"
 [ "$fail" -eq 0 ]

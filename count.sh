@@ -6,6 +6,7 @@
 #   count.sh fail          PostToolUseFailure hook: same thresholds as "tool", for tools that failed
 #   count.sh stop          Stop hook: ends a "count:finish" grant at the end of the turn
 #   count.sh status SID    for the status line: prints "consumed count pct", or nothing
+#   count.sh quota         Hermes plugin: merges a CLI rate_limit_event (JSON on stdin) into quota.json
 # Context lock (independent of count:): from COUNT_CTX_LIMIT tokens of context (default 150000)
 # "pre" denies every tool and "prompt" blocks every prompt, until the user types "unlock:".
 # "unlock:free" removes the context limit for the whole session, lock active or not.
@@ -301,7 +302,34 @@ log_mode() {
     '{t: $t, sid: $s, used: $u, resets_at: $r, tokens: $k}' >> "$COUNT_DIR/calib.log"
 }
 
+# Merges the CLI's rate_limit_event into quota.json with the status line's rules: in the same
+# window (resets_at within 60 s) a lower value loses, an older window loses, a newer one replaces.
+# utilization is a fraction (0.26 = 26 %), stored as the integer percent the status line writes.
+# Unusable input or a failed write leaves the file as it was. Prints nothing.
+quota_mode() {
+  local old out tmp
+  old=$(jq -c 'select(type == "object")' "$QUOTA" 2>/dev/null); [ -n "$old" ] || old='{}'
+  tmp="$QUOTA.tmp.$$"
+  out=$(jq --argjson old "$old" '
+    def pct: select(type == "number") | (. * 100 + 0.000001 | floor);
+    (.rate_limit_info.unifiedWindows // {}) as $w
+    | (($w.five_hour.utilization | pct) // null) as $u | $w.five_hour.resetsAt as $r
+    | (($w.seven_day.utilization | pct) // null) as $su | $w.seven_day.resetsAt as $sr
+    | $old.resets_at as $or | $old.used_percentage as $ou
+    | (if $u != null and ($r | type) == "number"
+         then (if ($or | type) == "number" and ($ou | type) == "number"
+                  and ($r < $or - 60 or ((($r - $or) | fabs) < 60 and $u < $ou))
+               then {} else {used_percentage: $u, resets_at: $r} end)
+         else {} end) as $five
+    | ({seven_day_used_percentage: $su, seven_day_resets_at: $sr} | with_entries(select(.value != null))) as $seven
+    | if ($five | length) == 0 and ($seven | length) == 0 then empty else $old + $five + $seven end
+  ' 2>/dev/null)
+  [ -n "$out" ] || exit 0
+  echo "$out" > "$tmp" && mv "$tmp" "$QUOTA" || rm -f "$tmp"
+}
+
 case "$1" in
+  quota)  quota_mode ;;
   log)    log_mode ;;
   tokens) tokens_mode "$2" ;;
   prompt) prompt_mode ;;
