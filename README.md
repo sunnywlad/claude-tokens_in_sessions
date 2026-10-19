@@ -401,7 +401,17 @@ Non vu en réel : `count:finish` (levée puis retombée à la fin du tour),
 6. Rappel et refus côté sous-agent, `--resume`, les cas du point 8 (deux sessions,
    `/clear`, `/compact`, préfixe hors début, double pose, préfixe sans tâche),
    formule de réinitialisation jamais vue en réel, blocage par `Stop`.
-7. **Adapter aux agents Hermes qui utilisent la subscription Claude** (à examiner,
+7. **Piste : un mod Claude Code** (2026-10-19, à étudier, rien d'essayé). Les types de la version
+   2.1.303 (skill `plugin-authoring`) exposent `$.session.usage()` : `{ startedAt, context,
+   rateLimits (five_hour, seven_day), cost }`, les chiffres de la status line, donc pas plus frais
+   (même écart entre sessions), mais sans `statusline.sh` ni `quota.json` ni fusion monotone.
+   Un mod peut aussi réécrire le prompt (`on('prompt.submit')`, `next({ ...e, text })`), ce que les
+   hooks ne permettent pas, refuser un outil (`on('tool.call')`), et déclarer une commande
+   (`$.command.register`, un vrai `/count 5`). Non vérifié : `/compact` et `/clear` passent-ils par
+   un mod, la fraîcheur de `rateLimits` dans un hook, `cost` utile au point 4. Ne sert pas les
+   agents Hermes (point 8) ni ne résout la conversion tokens en points. Premier essai possible :
+   un mod minimal qui affiche `$.session.usage()` à côté de `quota.json`.
+8. **Adapter aux agents Hermes qui utilisent la subscription Claude** (à examiner,
    décision de conception, rien d'observé). Ces agents consomment la même
    fenêtre 5 h globale du compte. Questions ouvertes : passent-ils par Claude
    Code, donc par les hooks et la status line, ou par un autre client ? Sans
