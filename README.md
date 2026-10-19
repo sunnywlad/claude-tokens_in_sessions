@@ -96,6 +96,16 @@ fichier. L'état de chaque session vit dans `~/.claude/count/<session_id>.json`
    `settings.json` est global : toutes les sessions ouvertes en profitent, y
    compris celles qui ne demandent aucun budget.
 
+### Barre de boutons (mod `count-bar`)
+
+Mod Claude Code : une rangée de boutons au-dessus du prompt, à droite, repliée par défaut et en gris. Touches `c` (interrupteur global du contexte), `f` (`count:finish`), `o` (`count:off`), `h` (replier). Focus par `Alt+A` : lier `abovePrompt:focus` dans `~/.claude/keybindings.json`. Le mod suppose `count.sh` et ses hooks déjà installés (voir Installation).
+
+```
+/plugin install count-bar --marketplace sunnywlad/claude-tokens_in_sessions
+```
+
+Sources dans `count-bar/`, tests par `claude plugin test count-bar`.
+
 ### Tests automatiques
 
 ```
@@ -307,7 +317,7 @@ Non vu en réel : `count:finish` (levée puis retombée à la fin du tour),
 
 - **Avertissement** : `PostToolUse` (`tool` et `fail`), sans `count:` requis, injecte
   `additionalContext` 15k tokens avant chaque palier de verrou (135k, puis 165k et 205k
-  après un `unlock:`) : finir la tâche, enregistrer en mémoire, se préparer au `/clear`.
+  après un `unlock:`) : finir la tâche, mettre la mémoire à jour, rédiger un prompt de reprise (modèle, effort, sous-agents), puis `/clear`. Sous un orchestrateur, la session envoie elle-même ce prompt par SendMessage.
   Une fois par palier (`<sid>.warn.json`). Muet au verrou, sous `unlock:free`, sans
   transcript. Marge réglable : `COUNT_CTX_WARN_MARGIN`. Aussi à la soumission d'un prompt (hors verrou `count:`).
 - **Interrupteur** : `bash ~/.claude/count.sh ctx off|on|status`. Le fichier
@@ -544,6 +554,6 @@ Bash and `jq` only.
   is injected.
 - The `count:N` prefix stays in the prompt: hooks cannot rewrite it.
 
-Install: see the settings snippet above. Tests: `bash test-count.sh` (248 checks
+Install: see the settings snippet above. Optional button bar above the prompt (mod `count-bar`, requires `count.sh` and its hooks): `/plugin install count-bar --marketplace sunnywlad/claude-tokens_in_sessions`. Tests: `bash test-count.sh` (248 checks
 in a throwaway `$HOME`). The French section lists what is still unverified in a
 live session (resume, subagents, update lag).

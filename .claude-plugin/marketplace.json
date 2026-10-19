@@ -1,0 +1,14 @@
+{
+  "name": "claude-tokens-in-sessions",
+  "owner": {
+    "name": "Wladimir Blaise"
+  },
+  "plugins": [
+    {
+      "name": "count-bar",
+      "source": "./count-bar",
+      "description": "Buttons above the prompt for the count:N hooks: global ctx lock switch, count:finish, count:off"
+    }
+  ],
+  "description": "Hooks and mods for per-task budget in Claude Code sessions"
+}

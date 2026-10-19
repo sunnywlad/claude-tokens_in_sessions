@@ -1,0 +1,9 @@
+{
+  "name": "count-bar",
+  "version": "0.1.0",
+  "description": "Buttons above the prompt for the count:N hooks: global ctx lock switch, count:finish, count:off",
+  "types": "./types/index.d.ts",
+  "author": {
+    "name": "Wladimir Blaise"
+  }
+}
