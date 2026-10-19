@@ -620,6 +620,9 @@ tr_line m2 false 135000 >> "$TR"
 out=$(ctool w1)
 check "warn: fires at 135k, PostToolUse" $([ "$(echo "$out" | jq -r .hookSpecificOutput.hookEventName)" = PostToolUse ]; echo $?)
 check "warn: names the size, the limit, memory and /clear" $(echo "$out" | ctx | grep -q "135k.*150k.*mémoire.*clear"; echo $?)
+check "warn: asks for the memory update and a resume prompt" $(echo "$out" | ctx | grep -q "mémoire.*prompt de reprise"; echo $?)
+check "warn: resume prompt carries model, effort, sub-agents" $(echo "$out" | ctx | grep -q "prompt de reprise.*modèle.*effort.*sous-agents"; echo $?)
+check "warn: under an orchestrator, sends the resume prompt itself" $(echo "$out" | ctx | grep -q "orchestrateur.*prompt de reprise.*SendMessage"; echo $?)
 check "warn: once only" $([ -z "$(ctool w1)" ]; echo $?)
 check "warn: another session still warned" $([ -n "$(ctool w2)" ]; echo $?)
 tr_line m3 false 150000 >> "$TR"

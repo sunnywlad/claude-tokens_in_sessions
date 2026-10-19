@@ -105,7 +105,7 @@ ctx_warn() { # ctx_warn SID TRANSCRIPT EVENT
   mkdir -p "$COUNT_DIR"
   tmp="$w.tmp.$$"
   jq -n --argjson a "$at" '{at: $a}' > "$tmp" && mv "$tmp" "$w" || { rm -f "$tmp"; return 1; }
-  emit "$3" "Contexte de la session à $((tokens / 1000))k tokens, verrou à $((at / 1000))k : bientôt la limite. Prépare-toi à finir la tâche en cours, à enregistrer l'essentiel en mémoire, puis à être clear (l'utilisateur lancera /clear). Ne démarre rien de nouveau."
+  emit "$3" "Contexte de la session à $((tokens / 1000))k tokens, verrou à $((at / 1000))k : bientôt la limite. Prépare-toi à finir la tâche en cours, à mettre la mémoire à jour, puis à rédiger un prompt de reprise pour la session suivante, avec le modèle, l'effort et l'architecture de sous-agents conseillés. Si tu obéis à un orchestrateur, envoie toi-même ce prompt de reprise à l'orchestrateur par SendMessage au lieu de le donner à l'utilisateur. Ensuite l'utilisateur lancera /clear. Ne démarre rien de nouveau."
 }
 
 # First step strictly above the given token count; nothing when none is left.
