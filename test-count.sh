@@ -668,5 +668,60 @@ check "switch: status reads on" $([ "$($B ctx status)" = on ]; echo $?)
 check "switch: on twice is harmless" $($B ctx on > /dev/null; echo $?)
 check "switch: off keeps the count: lock" $(reset; quota 10; prompt g3 "count:20 go" > /dev/null; $B ctx off > /dev/null; quota 28; [ -n "$(cpre g3)" ]; echo $?)
 
+# 32. Hermes context warning: "hermes ctx" estimates the context from conversation_history + user_message
+# (chars / 4), reads the profile's limit in hermes-ctx.limits (150000 when unlisted), and warns the model
+# CTX_WARN_MARGIN tokens before it, once per cycle. Hermes native compression does the clearing.
+LIM="$COUNT_DIR/hermes-ctx.limits"
+hx() { # hx PROFILE SID CHARS [USER_MESSAGE]
+  jq -nc --arg p "$1" --arg s "$2" --argjson n "$3" --arg u "${4:-hello}" \
+    '{hook_event_name: "pre_llm_call", session_id: $s, profile: $p, tool_name: null,
+      extra: {user_message: $u, conversation_history: [{role: "user", content: ("x" * $n)}]}}' | $B hermes ctx
+}
+reset; mkdir -p "$COUNT_DIR"; echo '{"alpha": 100000, "gamma": 60000}' > "$LIM"
+check "hermes ctx: 84750 tokens under a 100k limit, silent" $([ -z "$(hx alpha c1 339000)" ]; echo $?)
+out=$(hx alpha c1 340000)
+check "hermes ctx: 85000 tokens, fires as {context}" $(echo "$out" | jq -e '(.context | type == "string") and (has("hookSpecificOutput") | not)' >/dev/null; echo $?)
+check "hermes ctx: names the size, the limit, memory" $(echo "$out" | jq -e '.context | test("85k.*100k.*mémoire")' >/dev/null; echo $?)
+check "hermes ctx: once only" $([ -z "$(hx alpha c1 350000)" ]; echo $?)
+check "hermes ctx: another session still warned" $([ -n "$(hx alpha c2 340000)" ]; echo $?)
+check "hermes ctx: unlisted profile uses 150k, silent at 85k" $([ -z "$(hx beta c3 340000)" ]; echo $?)
+check "hermes ctx: unlisted profile fires at 135k" $(hx beta c3 540000 | jq -e '.context | test("135k.*150k")' >/dev/null; echo $?)
+check "hermes ctx: each profile has its own limit" $(hx gamma c4 180000 | jq -e '.context | test("45k.*60k")' >/dev/null; echo $?)
+check "hermes ctx: no profile field uses the default limit" $([ -z "$(jq -nc '{session_id: "c5", extra: {conversation_history: [{content: ("x" * 340000)}]}}' | $B hermes ctx)" ]; echo $?)
+hx alpha c1 20000 > /dev/null
+check "hermes ctx: after a compression the warning is re-armed" $([ -n "$(hx alpha c1 340000)" ]; echo $?)
+out=$(jq -nc '{session_id: "c7", profile: "alpha", extra: {user_message: "hi", conversation_history: [{content: [{type: "text", text: ("x" * 340000)}]}]}}' | $B hermes ctx)
+check "hermes ctx: content given as a list of parts is counted" $([ -n "$out" ]; echo $?)
+out=$(jq -nc '{session_id: "c8", profile: "alpha", extra: {user_message: ("x" * 340000)}}' | $B hermes ctx)
+check "hermes ctx: the new user message is counted" $([ -n "$out" ]; echo $?)
+out=$(hx alpha c9 400000)
+check "hermes ctx: past the limit, still warns" $(echo "$out" | jq -e '.context | test("100k")' >/dev/null; echo $?)
+$B ctx off > /dev/null
+check "hermes ctx: switch off, silent" $([ -z "$(hx alpha c10 340000)" ]; echo $?)
+$B ctx on > /dev/null
+check "hermes ctx: switch back on, fires" $([ -n "$(hx alpha c10 340000)" ]; echo $?)
+echo 'not json' > "$LIM"
+check "hermes ctx: broken limits file falls back to 150k" $([ -z "$(hx alpha c11 340000)" ]; echo $?)
+rm -f "$LIM"
+check "hermes ctx: no limits file falls back to 150k" $([ -z "$(hx alpha c12 340000)" ]; echo $?)
+echo '{"alpha": "lots"}' > "$LIM"
+check "hermes ctx: non-numeric limit falls back to 150k" $([ -z "$(hx alpha c13 340000)" ]; echo $?)
+check "hermes ctx: limits file survives the 24 h purge" $(echo '{"alpha": 100000}' > "$LIM"; touch -d '2 days ago' "$LIM"; prompt c14 hi > /dev/null; [ -e "$LIM" ]; echo $?)
+for junk in '' 'not json' '{}' '{"session_id":"../x","profile":"alpha","extra":{"user_message":"x"}}'; do
+  out=$(echo "$junk" | $B hermes ctx 2>&1); rc=$?
+  check "hermes ctx: junk '$junk' is silent" $([ -z "$out" ] && [ $rc -eq 0 ]; echo $?)
+done
+
+# Through the llm hook: the warning rides along with the count sentence in one {context}.
+reset; quota 11; mkdir -p "$COUNT_DIR"; echo '{"alpha": 100000}' > "$LIM"
+mk() { jq -nc --arg m "$1" --argjson n "$2" '{session_id: "c20", profile: "alpha", extra: {user_message: $m, conversation_history: [{content: ("x" * $n)}]}}'; }
+out=$(mk "count:25 go" 340000 | $B hermes llm)
+check "hermes llm: count sentence and context warning in one context" $(echo "$out" | jq -e '(.context | test("25 %.*plafond atteint à 36 %")) and (.context | test("85k.*100k"))' >/dev/null; echo $?)
+out=$(mk "next" 340000 | $B hermes llm)
+check "hermes llm: warning already given, silent" $([ -z "$out" ]; echo $?)
+reset; quota 11; mkdir -p "$COUNT_DIR"; echo '{"alpha": 100000}' > "$LIM"
+out=$(mk "plain" 340000 | $B hermes llm)
+check "hermes llm: warning alone, no count" $(echo "$out" | jq -e '.context | test("85k.*100k")' >/dev/null; echo $?)
+
 echo "passed: $pass, failed: $fail"
 [ "$fail" -eq 0 ]

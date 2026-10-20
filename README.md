@@ -505,13 +505,33 @@ Non vu en réel : `count:finish` (levée puis retombée à la fin du tour),
      Pas encore vu : un refus en vrai ; la passerelle (démarrée 18:15, après le correctif de
      16:13, donc plugin patché) n'a pas rechargé les hooks, redémarrage nécessaire. Le
      profil `recherche` a un `directsdk.py` sans correctif ni hooks.
+   - **Avertissement de contexte (2026-10-20, 304 tests verts, rouges d'abord)** :
+     `count.sh hermes ctx` (aussi lancé par `llm`) estime `conversation_history` plus
+     `user_message` en chars/4 (prompt système et schémas d'outils non comptés, estimation
+     basse). Limite par profil dans `$COUNT_DIR/hermes-ctx.limits` (JSON `{"profil": tokens}`,
+     sans extension `.json` pour échapper à la purge de 24 h), 150000 par défaut. Avertit 15k
+     avant la limite, une fois par cycle, réarmé quand le contexte retombe (`<sid>.hwarn.json`).
+     Le « clear » est la compression native : `compression.threshold_tokens: 150000` posé dans
+     les six `config.yaml` (un profil n'hérite pas de `~/.hermes/config.yaml`). Passerelle
+     redémarrée, un seul processus pour les six profils.
+   - **Vu en réel (2026-10-20)** : `claudesub`, limite 20000, prompt de 6k tokens
+     (`hermes -p claudesub chat -q`) : le modèle cite l'avertissement mot pour mot. Cron
+     (`hermes cron create`, tick de la passerelle) : le hook se déclenche et lit la limite de
+     `claudesub`, donc la passerelle multiplexée garde bien les hooks du profil du cron.
+     Piège de l'essai : sans `count:N` ni dépassement de seuil le hook n'écrit aucun fichier,
+     l'absence de fichier ne prouve rien. Non résolu : `count:5` en tête du prompt du cron n'a
+     créé aucun état (quota frais à 64 %), probablement parce que le scheduler enveloppe le
+     prompt et que `user_message` ne commence plus par le préfixe. Non vérifié. Compression à
+     150k jamais vue. `post_api_request` non câblé, l'estimation n'a pas été comparée à un
+     vrai `usage.prompt_tokens`.
    - Reste (ancien) : brancher les trois hooks dans `~/.hermes/profiles/claudesub/config.yaml`
      (profil d'essai, jamais `default`), accepter le consentement, essai réel avec
      `count:1` à `count:3` (`hermes -p claudesub chat -q`), puis `redacteur`. Vérifier
      que la passerelle relance bien le plugin patché. Un affichage de l'état côté
      Hermes reste à décider. Ajuster à l'usage (décision de Wladimir).
 
-Règles de la passe : un point à la fois, `count:3` ou `count:5` pour les essais,
+Règles de la passe : un point à la fois, `count:1` seulement pour les essais (au-delà,
+la consommation de tokens est inutile),
 aucun lancement manuel de `statusline.sh` avec de fausses valeurs, pas de
 mémoire locale (tout vit ici).
 
