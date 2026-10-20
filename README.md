@@ -506,24 +506,28 @@ Non vu en réel : `count:finish` (levée puis retombée à la fin du tour),
      16:13, donc plugin patché) n'a pas rechargé les hooks, redémarrage nécessaire. Le
      profil `recherche` a un `directsdk.py` sans correctif ni hooks.
    - **Avertissement de contexte (2026-10-20, 304 tests verts, rouges d'abord)** :
-     `count.sh hermes ctx` (aussi lancé par `llm`) estime `conversation_history` plus
-     `user_message` en chars/4 (prompt système et schémas d'outils non comptés, estimation
-     basse). Limite par profil dans `$COUNT_DIR/hermes-ctx.limits` (JSON `{"profil": tokens}`,
-     sans extension `.json` pour échapper à la purge de 24 h), 150000 par défaut. Avertit 15k
-     avant la limite, une fois par cycle, réarmé quand le contexte retombe (`<sid>.hwarn.json`).
-     Le « clear » est la compression native : `compression.threshold_tokens: 150000` posé dans
-     les six `config.yaml` (un profil n'hérite pas de `~/.hermes/config.yaml`). Passerelle
-     redémarrée, un seul processus pour les six profils.
-   - **Vu en réel (2026-10-20)** : `claudesub`, limite 20000, prompt de 6k tokens
-     (`hermes -p claudesub chat -q`) : le modèle cite l'avertissement mot pour mot. Cron
-     (`hermes cron create`, tick de la passerelle) : le hook se déclenche et lit la limite de
-     `claudesub`, donc la passerelle multiplexée garde bien les hooks du profil du cron.
-     Piège de l'essai : sans `count:N` ni dépassement de seuil le hook n'écrit aucun fichier,
-     l'absence de fichier ne prouve rien. Non résolu : `count:5` en tête du prompt du cron n'a
-     créé aucun état (quota frais à 64 %), probablement parce que le scheduler enveloppe le
-     prompt et que `user_message` ne commence plus par le préfixe. Non vérifié. Compression à
-     150k jamais vue. `post_api_request` non câblé, l'estimation n'a pas été comparée à un
-     vrai `usage.prompt_tokens`.
+     `count.sh hermes ctx` (aussi lancé par `llm`) compare le contexte à la limite du profil.
+     Taille : le dernier `prompt_tokens` réel, stocké par `count.sh hermes api` (hook
+     `post_api_request`, `<sid>.hreal.json`, prompt système et schémas d'outils compris, environ
+     25k sur un profil nu) plus le message neuf ; avant le premier appel API, repli sur
+     `conversation_history` plus `user_message` en chars/4, qui sous-estime de ce plancher.
+     Limite par profil dans `$COUNT_DIR/hermes-ctx.limits` (JSON `{"profil": tokens}`, sans
+     extension `.json` pour échapper à la purge de 24 h), 80000 par défaut (`COUNT_HERMES_CTX_LIMIT`).
+     Avertit 15k avant la limite, une fois par cycle, réarmé quand le contexte retombe
+     (`<sid>.hwarn.json`). Le « clear » est la compression native, qui compare les vrais
+     tokens : `compression.threshold_tokens: 80000` dans les six `config.yaml` (un profil
+     n'hérite pas de `~/.hermes/config.yaml`), la limite d'avertissement et le seuil doivent
+     rester égaux. Passerelle redémarrée le 2026-10-20 à 20:00, un seul processus pour les six
+     profils.
+   - **Vu en réel (2026-10-20)** : `claudesub`, limite 20000, prompt de 6k tokens : le modèle
+     cite l'avertissement. Cron sous la passerelle : le hook lit la limite du profil du cron.
+     `count:1` en tête d'un prompt cron : le scheduler préfixe `_CRON_HINT` (une ligne entre
+     crochets, `scheduler_prompt.py`), `llm` le retire avant de chercher le préfixe, état créé
+     (départ 47, plafond 48). `post_api_request` accepté en hook shell : `extra.usage.prompt_tokens`
+     reçu, 24782 pour un message de 30 caractères (estimation chars/4 : environ 30). Compression :
+     avec un seuil de 26000 le déclencheur tire (`Pre-API compression: ~43,901 >= 26,000`) mais
+     avorte en `insufficient_messages`, car 3 messages de tête et 20 de queue sont protégés ;
+     une conversation courte ne se compresse jamais. 324 tests verts.
    - Reste (ancien) : brancher les trois hooks dans `~/.hermes/profiles/claudesub/config.yaml`
      (profil d'essai, jamais `default`), accepter le consentement, essai réel avec
      `count:1` à `count:3` (`hermes -p claudesub chat -q`), puis `redacteur`. Vérifier

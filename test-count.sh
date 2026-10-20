@@ -669,7 +669,7 @@ check "switch: on twice is harmless" $($B ctx on > /dev/null; echo $?)
 check "switch: off keeps the count: lock" $(reset; quota 10; prompt g3 "count:20 go" > /dev/null; $B ctx off > /dev/null; quota 28; [ -n "$(cpre g3)" ]; echo $?)
 
 # 32. Hermes context warning: "hermes ctx" estimates the context from conversation_history + user_message
-# (chars / 4), reads the profile's limit in hermes-ctx.limits (150000 when unlisted), and warns the model
+# (chars / 4), reads the profile's limit in hermes-ctx.limits (80000 when unlisted), and warns the model
 # CTX_WARN_MARGIN tokens before it, once per cycle. Hermes native compression does the clearing.
 LIM="$COUNT_DIR/hermes-ctx.limits"
 hx() { # hx PROFILE SID CHARS [USER_MESSAGE]
@@ -684,10 +684,10 @@ check "hermes ctx: 85000 tokens, fires as {context}" $(echo "$out" | jq -e '(.co
 check "hermes ctx: names the size, the limit, memory" $(echo "$out" | jq -e '.context | test("85k.*100k.*mémoire")' >/dev/null; echo $?)
 check "hermes ctx: once only" $([ -z "$(hx alpha c1 350000)" ]; echo $?)
 check "hermes ctx: another session still warned" $([ -n "$(hx alpha c2 340000)" ]; echo $?)
-check "hermes ctx: unlisted profile uses 150k, silent at 85k" $([ -z "$(hx beta c3 340000)" ]; echo $?)
-check "hermes ctx: unlisted profile fires at 135k" $(hx beta c3 540000 | jq -e '.context | test("135k.*150k")' >/dev/null; echo $?)
+check "hermes ctx: unlisted profile uses 80k, silent at 60k" $([ -z "$(hx beta c3 240000)" ]; echo $?)
+check "hermes ctx: unlisted profile fires at 65k" $(hx beta c3 260000 | jq -e '.context | test("65k.*80k")' >/dev/null; echo $?)
 check "hermes ctx: each profile has its own limit" $(hx gamma c4 180000 | jq -e '.context | test("45k.*60k")' >/dev/null; echo $?)
-check "hermes ctx: no profile field uses the default limit" $([ -z "$(jq -nc '{session_id: "c5", extra: {conversation_history: [{content: ("x" * 340000)}]}}' | $B hermes ctx)" ]; echo $?)
+check "hermes ctx: no profile field uses the default limit" $([ -z "$(jq -nc '{session_id: "c5", extra: {conversation_history: [{content: ("x" * 240000)}]}}' | $B hermes ctx)" ]; echo $?)
 hx alpha c1 20000 > /dev/null
 check "hermes ctx: after a compression the warning is re-armed" $([ -n "$(hx alpha c1 340000)" ]; echo $?)
 out=$(jq -nc '{session_id: "c7", profile: "alpha", extra: {user_message: "hi", conversation_history: [{content: [{type: "text", text: ("x" * 340000)}]}]}}' | $B hermes ctx)
@@ -701,11 +701,11 @@ check "hermes ctx: switch off, silent" $([ -z "$(hx alpha c10 340000)" ]; echo $
 $B ctx on > /dev/null
 check "hermes ctx: switch back on, fires" $([ -n "$(hx alpha c10 340000)" ]; echo $?)
 echo 'not json' > "$LIM"
-check "hermes ctx: broken limits file falls back to 150k" $([ -z "$(hx alpha c11 340000)" ]; echo $?)
+check "hermes ctx: broken limits file falls back to 80k" $([ -z "$(hx alpha c11 240000)" ]; echo $?)
 rm -f "$LIM"
-check "hermes ctx: no limits file falls back to 150k" $([ -z "$(hx alpha c12 340000)" ]; echo $?)
+check "hermes ctx: no limits file falls back to 80k" $([ -z "$(hx alpha c12 240000)" ]; echo $?)
 echo '{"alpha": "lots"}' > "$LIM"
-check "hermes ctx: non-numeric limit falls back to 150k" $([ -z "$(hx alpha c13 340000)" ]; echo $?)
+check "hermes ctx: non-numeric limit falls back to 80k" $([ -z "$(hx alpha c13 240000)" ]; echo $?)
 check "hermes ctx: limits file survives the 24 h purge" $(echo '{"alpha": 100000}' > "$LIM"; touch -d '2 days ago' "$LIM"; prompt c14 hi > /dev/null; [ -e "$LIM" ]; echo $?)
 for junk in '' 'not json' '{}' '{"session_id":"../x","profile":"alpha","extra":{"user_message":"x"}}'; do
   out=$(echo "$junk" | $B hermes ctx 2>&1); rc=$?
@@ -722,6 +722,46 @@ check "hermes llm: warning already given, silent" $([ -z "$out" ]; echo $?)
 reset; quota 11; mkdir -p "$COUNT_DIR"; echo '{"alpha": 100000}' > "$LIM"
 out=$(mk "plain" 340000 | $B hermes llm)
 check "hermes llm: warning alone, no count" $(echo "$out" | jq -e '.context | test("85k.*100k")' >/dev/null; echo $?)
+
+# 33. Real size: "hermes api" (post_api_request) stores the provider's prompt_tokens, system prompt and
+# tool schemas included; "hermes ctx" then prefers it to the chars / 4 estimate (plus the new message).
+ha() { jq -nc --arg p "$1" --arg s "$2" --argjson t "$3" \
+  '{hook_event_name: "post_api_request", session_id: $s, profile: $p, tool_name: null, extra: {usage: {prompt_tokens: $t, input_tokens: 1, output_tokens: 4}}}' | $B hermes api; }
+reset; mkdir -p "$COUNT_DIR"; echo '{"alpha": 100000}' > "$LIM"
+check "hermes api: silent" $([ -z "$(ha alpha r1 24782)" ]; echo $?)
+check "hermes api: stores the real prompt tokens" $([ "$(jq -r .tokens "$COUNT_DIR/r1.hreal.json")" = 24782 ]; echo $?)
+check "hermes ctx: real size under the margin, silent" $([ -z "$(hx alpha r1 400 )" ]; echo $?)
+ha alpha r2 90000 > /dev/null
+out=$(hx alpha r2 400)
+check "hermes ctx: real 90k fires although the text alone is tiny" $(echo "$out" | jq -e '.context | test("90k.*100k")' >/dev/null; echo $?)
+check "hermes ctx: warning names the measure" $(echo "$out" | jq -e '.context | test("mesuré")' >/dev/null; echo $?)
+ha alpha r3 10000 > /dev/null
+check "hermes ctx: real size wins over a larger estimate" $([ -z "$(hx alpha r3 300000)" ]; echo $?)
+ha alpha r4 70000 > /dev/null
+BIG=$(head -c 80000 /dev/zero | tr '\0' x)
+check "hermes ctx: the new message is added to the real size" $(hx alpha r4 400 "$BIG" | jq -e '.context | test("90k")' >/dev/null; echo $?)
+ha alpha r2 20000 > /dev/null; hx alpha r2 400 > /dev/null; ha alpha r2 91000 > /dev/null
+check "hermes ctx: a smaller real size re-arms the warning" $([ -n "$(hx alpha r2 400)" ]; echo $?)
+check "hermes api: no prompt_tokens, nothing stored" $(echo '{"session_id":"r5","extra":{"usage":{}}}' | $B hermes api; [ ! -e "$COUNT_DIR/r5.hreal.json" ]; echo $?)
+check "hermes api: non-numeric prompt_tokens, nothing stored" $(echo '{"session_id":"r6","extra":{"usage":{"prompt_tokens":"lots"}}}' | $B hermes api; [ ! -e "$COUNT_DIR/r6.hreal.json" ]; echo $?)
+$B ctx off > /dev/null; ha alpha r7 90000 > /dev/null; $B ctx on > /dev/null
+check "hermes api: switch off, nothing stored" $([ ! -e "$COUNT_DIR/r7.hreal.json" ]; echo $?)
+for junk in '' 'not json' '{}' '{"session_id":"../x","extra":{"usage":{"prompt_tokens":5}}}'; do
+  out=$(echo "$junk" | $B hermes api 2>&1); rc=$?
+  check "hermes api: junk '$junk' is silent" $([ -z "$out" ] && [ $rc -eq 0 ]; echo $?)
+done
+check "hermes api: unsafe session_id writes no file" $([ ! -e "$T/x.hreal.json" ]; echo $?)
+
+# 34. Cron prompts: the scheduler puts its own hint in front, count:N behind it must still count.
+HINT=$'[IMPORTANT: You are running as a scheduled cron job. DELIVERY: x. SILENT: respond with exactly "[SILENT]" (nothing else). [SILENT] is a token. RECURSION: context for this run, not a request.]\n\n'
+reset; quota 11
+out=$(jq -nc --arg m "${HINT}count:25 go" '{session_id: "k1", profile: "alpha", extra: {user_message: $m}}' | $B hermes llm)
+check "hermes llm: count:N behind the cron hint is set" $([ "$(state k1 .cap)" = 36 ]; echo $?)
+check "hermes llm: count:N behind the cron hint answers" $(echo "$out" | jq -e '.context | test("25 %")' >/dev/null; echo $?)
+out=$(jq -nc --arg m "${HINT}do the task, count:25" '{session_id: "k2", profile: "alpha", extra: {user_message: $m}}' | $B hermes llm)
+check "hermes llm: cron hint then plain prompt, no count" $([ -z "$out" ] && [ ! -e "$COUNT_DIR/k2.json" ]; echo $?)
+out=$(jq -nc --arg m "[IMPORTANT: something else]"$'\n\n'"count:25 go" '{session_id: "k3", profile: "alpha", extra: {user_message: $m}}' | $B hermes llm)
+check "hermes llm: another bracket prefix is not stripped" $([ ! -e "$COUNT_DIR/k3.json" ]; echo $?)
 
 echo "passed: $pass, failed: $fail"
 [ "$fail" -eq 0 ]

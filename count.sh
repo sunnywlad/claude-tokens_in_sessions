@@ -6,7 +6,7 @@
 #   count.sh fail          PostToolUseFailure hook: same thresholds as "tool", for tools that failed
 #   count.sh stop          Stop hook: ends a "count:finish" grant at the end of the turn
 #   count.sh status SID    for the status line: prints "consumed count pct", or nothing
-#   count.sh hermes llm|pre|end   Hermes shell hooks (pre_llm_call, pre_tool_call, on_session_end)
+#   count.sh hermes llm|pre|end|api   Hermes shell hooks (pre_llm_call, pre_tool_call, on_session_end, post_api_request)
 #   count.sh hermes ctx    Hermes pre_llm_call: context warning per profile (also run by "llm")
 #   count.sh ctx on|off|status   global switch of the context lock and warning (night runs)
 #   count.sh quota         Hermes plugin: merges a CLI rate_limit_event (JSON on stdin) into quota.json
@@ -21,6 +21,7 @@ COUNT_DIR="${COUNT_DIR:-$HOME/.claude/count}"
 QUOTA="${QUOTA_FILE:-$HOME/.claude/quota.json}"
 NOW="${COUNT_NOW:-$(date +%s)}"
 CTX_LIMIT="${COUNT_CTX_LIMIT:-150000}"
+HCTX_LIMIT="${COUNT_HERMES_CTX_LIMIT:-80000}"   # Hermes default, same value as compression.threshold_tokens in its profiles
 CTX_STEPS="${COUNT_CTX_STEPS:-180000 220000}"   # the lock comes back at each, one "unlock:" per step
 CTX_WARN_MARGIN="${COUNT_CTX_WARN_MARGIN:-15000}"   # the session is warned this many tokens before a lock
 CTX_LIMITS="$COUNT_DIR/hermes-ctx.limits"   # {"<profile>": tokens}; not .json, the 24 h purge would eat it
@@ -355,22 +356,31 @@ quota_mode() {
   echo "$out" > "$tmp" && mv "$tmp" "$QUOTA" || rm -f "$tmp"
 }
 
-# Context warning for Hermes (pre_llm_call payload as $1). Hermes gives no token count to a shell hook,
-# so the size is estimated: chars of conversation_history + user_message, / 4 (the system prompt and the
-# tool schemas are not counted, the estimate runs low). The limit comes from CTX_LIMITS by profile, else
-# CTX_LIMIT. Warns once CTX_WARN_MARGIN tokens before it; back under the margin (native compression ran)
-# re-arms the warning. Prints {context} or nothing.
+# Context warning for Hermes (pre_llm_call payload as $1). Hermes gives no token count to this hook, so the
+# size is the last real prompt_tokens stored by "hermes api" (post_api_request: system prompt and tool
+# schemas included, about 25k on a bare profile) plus the new message; before the first API call of a
+# session it falls back to chars of conversation_history + user_message / 4, which runs low by that
+# overhead. The limit comes from CTX_LIMITS by profile, else HCTX_LIMIT; keep it equal to the profile's
+# compression.threshold_tokens, which Hermes compares to the real count. Warns once CTX_WARN_MARGIN tokens
+# before it; back under the margin (native compression ran) re-arms the warning. Prints {context} or nothing.
 hermes_ctx() { # hermes_ctx PAYLOAD
-  local sid prof at tokens w tmp
+  local sid prof at tokens how w tmp real
   [ -e "$CTX_OFF" ] && return 0
   sid=$(jq -r '.session_id // empty' <<<"$1" 2>/dev/null)
   valid_sid "$sid" || return 0
   prof=$(jq -r '.profile // empty' <<<"$1" 2>/dev/null)
   at=$(jq -r --arg p "$prof" '.[$p] | select(type == "number" and . > 0) | floor' "$CTX_LIMITS" 2>/dev/null)
-  [ -n "$at" ] || at=$CTX_LIMIT
-  tokens=$(jq -r '((.extra.conversation_history | if type == "array" then . else [] end)
-      | map((.content? // "") | if type == "string" then . else tojson end | length) | add // 0)
-      + ((.extra.user_message // "") | length) | ./4 | floor' <<<"$1" 2>/dev/null)
+  [ -n "$at" ] || at=$HCTX_LIMIT
+  real=$(jq -r '.tokens | select(type == "number") | floor' "$COUNT_DIR/$sid.hreal.json" 2>/dev/null)
+  if [ -n "$real" ]; then
+    how=mesuré
+    tokens=$(jq -r --argjson r "$real" '$r + ((.extra.user_message // "") | length / 4 | floor)' <<<"$1" 2>/dev/null)
+  else
+    how=estimé
+    tokens=$(jq -r '((.extra.conversation_history | if type == "array" then . else [] end)
+        | map((.content? // "") | if type == "string" then . else tojson end | length) | add // 0)
+        + ((.extra.user_message // "") | length) | ./4 | floor' <<<"$1" 2>/dev/null)
+  fi
   [ -n "$tokens" ] || return 0
   w="$COUNT_DIR/$sid.hwarn.json"
   if [ "$tokens" -lt $((at - CTX_WARN_MARGIN)) ]; then rm -f "$w"; return 0; fi
@@ -378,21 +388,36 @@ hermes_ctx() { # hermes_ctx PAYLOAD
   mkdir -p "$COUNT_DIR"
   tmp="$w.tmp.$$"
   jq -n --argjson a "$at" '{at: $a}' > "$tmp" && mv "$tmp" "$w" || { rm -f "$tmp"; return 0; }
-  jq -nc --arg m "Contexte estimé à $((tokens / 1000))k tokens, limite de ce profil à $((at / 1000))k : la compression automatique approche. Termine l'étape en cours, mets ta mémoire à jour, ne démarre rien de nouveau." '{context: $m}'
+  jq -nc --arg m "Contexte $how à $((tokens / 1000))k tokens, limite de ce profil à $((at / 1000))k : la compression automatique approche. Termine l'étape en cours, mets ta mémoire à jour, ne démarre rien de nouveau." '{context: $m}'
+}
+
+# post_api_request (payload as $1): stores the provider's real prompt_tokens for "hermes_ctx". Writes only.
+hermes_api() { # hermes_api PAYLOAD
+  local sid t tmp
+  [ -e "$CTX_OFF" ] && return 0
+  sid=$(jq -r '.session_id // empty' <<<"$1" 2>/dev/null)
+  valid_sid "$sid" || return 0
+  t=$(jq -r '.extra.usage.prompt_tokens | select(type == "number" and . > 0) | floor' <<<"$1" 2>/dev/null)
+  [ -n "$t" ] || return 0
+  mkdir -p "$COUNT_DIR"
+  tmp="$COUNT_DIR/$sid.hreal.json.tmp.$$"
+  jq -n --argjson t "$t" --argjson n "$NOW" '{tokens: $t, at: $n}' > "$tmp" && mv "$tmp" "$COUNT_DIR/$sid.hreal.json" || rm -f "$tmp"
 }
 
 # Hermes shell hooks speak another wire format: {session_id, tool_name, extra: {user_message}} in,
 # {context} / {decision: block, reason} out. This adapts them to the modes above. Hermes cannot refuse
 # a prompt (pre_llm_call only injects) and has no mid-turn injection, so at a lock the model is told
 # to relay the lock, and the threshold reminders arrive at the start of the next turn.
-hermes_mode() { # hermes_mode llm|pre|end|ctx
+hermes_mode() { # hermes_mode llm|pre|end|ctx|api
   local in sid out c w
   in=$(cat)
   sid=$(jq -r '.session_id // empty' <<<"$in" 2>/dev/null)
   valid_sid "$sid" || exit 0
   case "$1" in
     llm)
-      out=$(jq -c '{session_id, prompt: (.extra.user_message // "")}' <<<"$in" | prompt_mode)
+      # The cron scheduler puts its own one-line bracketed hint in front of the job prompt: count:N follows it.
+      out=$(jq -c '{session_id, prompt: ((.extra.user_message // "")
+          | sub("^\\[IMPORTANT: You are running as a scheduled cron job\\.[^\n]*\\]\n\n"; ""))}' <<<"$in" | prompt_mode)
       if [ -z "$out" ]; then
         out=$(jq -nc --arg s "$sid" '{session_id: $s}' | tool_mode)
       fi
@@ -403,6 +428,8 @@ hermes_mode() { # hermes_mode llm|pre|end|ctx
       jq -nc --arg c "$c" --arg w "$w" '{context: ([$c, $w] | map(select(. != "")) | join("\n\n"))}' ;;
     ctx)
       hermes_ctx "$in" ;;
+    api)
+      hermes_api "$in" ;;
     pre)
       out=$(jq -c '{session_id, tool_name}' <<<"$in" | pre_mode)
       [ -n "$out" ] || exit 0
