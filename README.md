@@ -98,7 +98,7 @@ fichier. L'état de chaque session vit dans `~/.claude/count/<session_id>.json`
 
 ### Barre de boutons (mod `count-bar`)
 
-Mod Claude Code : une rangée de boutons au-dessus du prompt, à droite, repliée par défaut et en gris. Touches `c` (interrupteur global du contexte), `f` (`count:finish`), `o` (`count:off`), `h` (replier). Focus par `Alt+A` : lier `abovePrompt:focus` dans `~/.claude/keybindings.json`. Le mod suppose `count.sh` et ses hooks déjà installés (voir Installation).
+Mod Claude Code : une rangée au-dessus du prompt, à droite, repliée par défaut. Repliée, elle montre un `c` nu (blanc si le contexte est actif, gris sinon) et la flèche `←`. Dépliée, la sonde `5h mod X · quota Y` (`$.session.usage()` à côté de `quota.json`) et les boutons `c` (interrupteur global du contexte), `f` (`count:finish`), `o` (`count:off`), puis `→` (touche `h`, replier). Focus par `Alt+A` : lier `abovePrompt:focus` dans `~/.claude/keybindings.json`. Le mod suppose `count.sh` et ses hooks déjà installés (voir Installation).
 
 ```
 /plugin install count-bar --marketplace sunnywlad/claude-tokens_in_sessions
